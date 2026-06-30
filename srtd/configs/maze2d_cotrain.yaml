@@ -1,0 +1,70 @@
+seed: 0
+method: cotrain
+run_root: runs
+
+dataset:
+  name: maze2d_fallback
+  maze_yaml: assets/maze2d_default.yaml
+  fallback_generate: true
+  num_clean_episodes: 50
+  num_rrt_episodes: 5000
+  episode_horizon: 100
+  policy_horizon: 16
+  execute_horizon: 8
+  obs_horizon: 2
+  stride: 4
+
+model:
+  type: temporal_unet
+  action_dim: 2
+  obs_dim: 6
+  base_channels: 64
+  num_layers: 6
+  dropout: 0.0
+  predict: x0
+
+diffusion:
+  type: vp
+  schedule: cosine
+  train_steps: 100
+  inference_steps: 10
+
+training:
+  batch_size: 256
+  lr: 1.0e-4
+  weight_decay: 1.0e-6
+  total_steps: 200000
+  grad_clip_norm: 1.0
+  ema_decay: 0.999
+  save_every: 10000
+  eval_every: 25000
+  log_every: 100
+  num_workers: 8
+  amp: true
+  alpha_p: 0.019
+  tmin_sigma_scalar: 0.074
+  device: auto
+
+spectral:
+  eps: 1.0e-6
+  basis: rfft
+  envelope_kernel_size: 3
+  snr_tau: 1.0
+  visibility_temperature: 0.5
+  min_visible_weight: 0.02
+  bad_residual_margin: 0.0
+  global_band_cutoff_norm: 0.20
+  compat_temperature: 0.25
+  low_freq_floor: 0.25
+  beta_clean_saliency: 0.25
+  saliency_clip: 5.0
+  lambda_p_freq: 0.1
+  q_loss_weight: 1.0
+
+eval:
+  num_trials: 1000
+  same_start_goal_across_policies: true
+  success_radius_m: 0.15
+  timeout_s: 30.0
+  dt: 0.1
+

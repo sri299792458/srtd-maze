@@ -1,0 +1,312 @@
+Yes. The paper waiting to be written is **not** “apply FFT to robot actions.” It is deeper:
+
+# Trajectory Diffusion Is Spectral Skill Autoregression
+
+The missing synthesis is this: **robot trajectories have a predictable spectral envelope, but task success is often determined by sparse spectral residuals.** Diffusion policies already traverse this spectrum from low-frequency plan to high-frequency execution. A seminal robotics paper would make that structure explicit and use it to learn, segment, transfer, and denoise behavior in trajectory space.
+
+Sander Dieleman’s key point is that diffusion on images behaves like **approximate autoregression in frequency space**: natural images have power-law spectra, Gaussian noise is spectrally flat, and adding noise drowns high frequencies before low frequencies, so reverse diffusion reconstructs coarse-to-fine structure. He explicitly frames this as “approximate spectral autoregression,” while noting that the noise-frequency mapping is smooth and distributional rather than a hard per-sample rule. ([Sander Dieleman][1])
+
+Hou and Zhang’s spectral residual paper supplies the missing “saliency” operator: do not merely observe that natural signals have a predictable spectral envelope; subtract that envelope and call what remains **innovation**. Their model decomposes image information into prior knowledge plus innovation, estimates the smooth log-spectrum, subtracts it to obtain the spectral residual, and inverse-transforms the residual plus phase to get a spatial saliency map of proto-objects.   
+
+The Ambient Diffusion Policy paper already takes the first robotics step: robot action data exhibits a spectral power law; diffusion policies exhibit a global-to-local hierarchy; Gaussian noise acts like a high-frequency mask; and suboptimal robot data can be used only at diffusion times where it agrees with target data.   
+
+The next paper should generalize this from **noise-dependent data usage** to **spectral-residual trajectory learning**.
+
+## The core thesis
+
+A robot trajectory is like a natural image in the following sense: most of its energy is boring, smooth, predictable, and power-law distributed. But the important parts are not uniformly distributed. They are **spectral surprises**: contact onset, grasp closure, constraint activation, loss of sticking, snap-through, insertion alignment, regrasp, mode switch, collision avoidance, force correction, recovery after slip.
+
+In images, spectral residuals reveal proto-objects. In trajectories, spectral residuals should reveal **proto-skills** or **proto-events**.
+
+The slogan:
+
+> **A trajectory is a power-law envelope plus sparse task-critical residuals. Diffusion over trajectories is autoregression over this envelope and its residuals.**
+
+Ambient Diffusion Policy says: high noise learns global plan, low noise learns local primitives. The bigger move is to ask: **which spectral bands, timesteps, joints, objects, and contact modes actually contain the innovation?** The answer should drive the policy architecture, loss, data mixture, diffusion schedule, and evaluation.
+
+## The object of study: trajectory saliency
+
+Let a trajectory be
+
+[
+x_{0:T} \in \mathbb{R}^{T \times d},
+]
+
+where (d) may include joint positions, end-effector pose increments, gripper state, object poses, force/torque, tactile features, or latent action tokens.
+
+Choose an orthonormal trajectory basis (\Psi). The simplest version is temporal Fourier:
+
+[
+\hat{x}(\omega) = \mathcal{F}_t x.
+]
+
+The more serious version is a product basis:
+
+[
+\Psi = \Psi_{\text{time}} \otimes \Psi_{\text{body}} \otimes \Psi_{\text{object}},
+]
+
+where (\Psi_{\text{time}}) can be Fourier, DCT, STFT, or wavelet; (\Psi_{\text{body}}) can be a graph Fourier basis on the robot kinematic tree; and (\Psi_{\text{object}}) can be a graph basis over object/contact relations. For SE(3), use tangent-space coordinates in (\mathfrak{se}(3)), with careful unwrapping and normalization.
+
+Then define the **conditional spectral envelope**:
+
+[
+A_\theta(\omega \mid o, g, e)
+= \mathbb{E}_\theta[\log(|\hat{x}(\omega)|+\epsilon) \mid \text{observation } o, \text{ goal } g, \text{ embodiment } e].
+]
+
+The **trajectory spectral residual** is
+
+[
+R_x(\omega)
+===========
+
+## \log(|\hat{x}(\omega)|+\epsilon)
+
+A_\theta(\omega \mid o,g,e).
+]
+
+Then reconstruct a trajectory-space saliency map using the residual magnitude and original phase:
+
+[
+S_x(t,j)
+========
+
+\left|
+\Psi^{-1}
+\left(
+\exp(R_x(\omega)) \cdot e^{i \phi_x(\omega)}
+\right)
+\right|^2_{t,j}.
+]
+
+This is the direct analogue of spectral residual saliency, but the output is no longer a heatmap over pixels. It is a heatmap over **time × degree-of-freedom × object/contact channel**.
+
+A high value of (S_x(t,j)) should mean: “something non-generic and behaviorally important is happening here.”
+
+That is the first publishable result: **trajectory saliency without labels**.
+
+## What the method should do
+
+Call it **Spectral Residual Trajectory Diffusion**.
+
+It should have four coupled modules.
+
+First, a **spectral envelope model** learns the boring part of robot motion: smoothness, power-law decay, embodiment-specific actuation bandwidth, task-conditioned low-frequency structure.
+
+Second, a **residual saliency model** identifies the surprising parts: contacts, switches, high-curvature corrections, discontinuities, local constraint satisfaction, recovery maneuvers.
+
+Third, a **frequency-aware diffusion process** no longer uses isotropic action noise as a black box. In spectral coordinates:
+
+[
+\hat{x}_t(\omega)
+=================
+
+\alpha_t(\omega)\hat{x}*0(\omega)
++
+\sigma_t(\omega)\epsilon*\omega.
+]
+
+The detectable bands at diffusion time (t) are those whose spectral SNR exceeds a threshold:
+
+[
+\text{SNR}_t(\omega)
+====================
+
+\frac{\alpha_t(\omega)^2 P_\theta(\omega)}
+{\sigma_t(\omega)^2}.
+]
+
+This turns diffusion time into an interpretable curriculum: global object motion and route topology first, grasp/contact/micro-corrections later.
+
+Fourth, a **residual-gated training loss** focuses model capacity where the innovation is:
+
+[
+\mathcal{L}
+===========
+
+\sum_{\omega}
+w(\omega, x, o)
+\left|
+\hat{x}_{0,\theta}(\omega)
+--------------------------
+
+\hat{x}_0(\omega)
+\right|^2,
+]
+
+where (w) increases on bands/times with high residual saliency and decreases on generic smooth bands that the model already captures.
+
+The important shift is this: diffusion policy becomes less like “denoise all actions equally” and more like **autoregressively explain the predictable envelope, then spend computation on the residuals that matter**.
+
+## The killer generalization of Ambient Diffusion Policy
+
+Ambient Diffusion Policy uses scalar intervals (t \in [0,t_{\max}) \cup (t_{\min},T]) to decide when suboptimal data may contribute. That is already powerful. But it is still coarse. The next paper should replace scalar timestep gates with **spectral compatibility masks**.
+
+For each auxiliary dataset (D_q), learn where it agrees with the target dataset (D_p):
+
+[
+M_q(\omega, t, c)
+\in
+{0,1},
+]
+
+where (c) is context: task, embodiment, object, environment, contact regime.
+
+Then train on auxiliary data only when its spectral content is useful:
+
+[
+\mathcal{L}_{q}
+===============
+
+\sum_{\omega,t}
+M_q(\omega,t,c)
+\left|
+\hat{x}_{0,\theta}^{q}(\omega,t)
+--------------------------------
+
+\hat{x}_0^q(\omega)
+\right|^2.
+]
+
+This would strictly generalize Ambient’s idea. Ambient says: “Use suboptimal data at high noise if low-frequency plan agrees, and at low noise if local primitives agree.” The spectral-residual version says: “Use each dataset only for the bands and events where its envelope or residual matches the target.”
+
+That unlocks very concrete cases:
+
+A sampling-based planner may be useful for low-frequency maze topology but harmful for high-frequency smoothness.
+
+A simulator may be useful for global object displacement but harmful for contact-rich microdynamics.
+
+Human video may be useful for object-space low-frequency intent but useless for robot joint-space residuals.
+
+Failed demonstrations may contain useful prefixes, grasps, recoveries, or contact events even if the final outcome is bad.
+
+Cross-embodiment data may share object-space spectral structure while disagreeing in embodiment-space high-frequency bands.
+
+This is a more fine-grained answer to the data-mixture problem than filtering, reweighting, or scalar (t_{\min}) sweeps. The Ambient paper itself shows that scalar noise-dependent usage can outperform co-training and filtering, including in OXE-scale experiments; the spectral mask version is the natural next step. 
+
+## The conceptual contribution: proto-skills
+
+The saliency paper talks about proto-objects: candidates that pop out before recognition. The robotics analogue is **proto-skills**.
+
+A proto-skill is not yet a symbolic skill like “grasp mug” or “insert peg.” It is a trajectory event that becomes salient because it violates the smooth predictable background of motion.
+
+Examples:
+
+The gripper closing instant.
+
+The first nonzero contact wrench.
+
+The moment a pushed object transitions from sticking to sliding.
+
+The short corrective twist before insertion.
+
+The reorientation pulse before placing a block.
+
+The recovery movement after a failed grasp.
+
+The spectral residual map should detect these without labels. Then the policy can use them as latent anchors.
+
+That would bridge low-level imitation and high-level task structure without hand-designed skill boundaries.
+
+## The paper’s most important empirical figure
+
+The figure that would make people pay attention is a trajectory analogue of a visual saliency map.
+
+Show a manipulation trajectory with synchronized video, action, force, and gripper state.
+
+Below it, show:
+
+1. Raw trajectory.
+2. Power spectrum with learned envelope.
+3. Spectral residual.
+4. Inverse residual saliency over time and joints.
+5. Ground-truth events: contact, grasp, slip, insertion, release.
+
+The punchline should be that residual saliency spikes at behaviorally meaningful events, even without event labels.
+
+That figure would do for robot trajectories what Hou and Zhang’s saliency maps did for images.
+
+## Experiments that would make it seminal
+
+The first experiment should establish the **trajectory spectral law** beyond action chunks. Ambient already shows power-law structure in robot action data across multiple datasets. The next paper should test richer signals: joint trajectories, end-effector trajectories, object poses, force/torque, tactile streams, visual latent trajectories, and graph-Fourier modes over the kinematic tree. 
+
+The second experiment should test **residual saliency as event discovery**. Use tasks with labeled or automatically detectable events: grasp closure, contact onset, peg insertion, tool contact, drawer opening, object release, slip. Compare against acceleration peaks, jerk, force thresholds, learned segmentation, and attention maps.
+
+The third experiment should test **residual-gated diffusion policy**. Compare against Diffusion Policy, Ambient Diffusion Policy, data filtering, co-training, and hierarchical skill baselines. Use sparse expert data plus large auxiliary data. The method should win on success, smoothness, contact precision, and sample efficiency.
+
+The fourth experiment should test **spectral data routing**. Construct auxiliary datasets where different bands are useful or harmful. For example: RRT paths are globally useful but locally jittery; simulation is globally useful but contact-locally biased; wrong-task pick-place data has useful grasp primitives but wrong logic. Ambient already demonstrates versions of these; the new paper should show that spectral masks choose the right bands automatically.  
+
+The fifth experiment should test **long-horizon robustness**. Spectral residuals should matter most when success depends on a few decisive micro-events inside long smooth behavior: tower building, assembly, insertion, cable routing, cloth manipulation, tool use, food prep.
+
+## The theory section
+
+A clean theoretical model could be:
+
+[
+x = z + r,
+]
+
+where (z) is a stationary smooth trajectory process with power-law spectrum,
+
+[
+P_z(\omega) \propto |\omega|^{-\alpha},
+]
+
+and (r) is a sparse residual process localized in time, frequency, or graph-frequency.
+
+Then prove four things.
+
+First: **noise-as-bandlimiting**. Under a power-law envelope, Gaussian noise hides high-frequency trajectory components before low-frequency components, so diffusion induces spectral autoregression.
+
+Second: **residual recoverability**. If the envelope is locally smooth in log-spectrum and the residual is sparse or nonstationary, then subtracting a local or learned spectral envelope recovers the support of task-relevant innovations.
+
+Third: **locality of denoising**. Ambient already proves a version where spectral power laws imply locality of the optimal denoiser at low noise. The new theory should extend this to multi-channel trajectory bases and graph-time product spaces. 
+
+Fourth: **unbiased auxiliary data use**. If (D_q) matches (D_p) on a spectral subset (\Omega) but differs outside it, then training on (D_q) with mask (M_q(\Omega)=1) reduces variance without introducing bias on the target denoiser for those bands.
+
+That last theorem would be the mathematical heart of the paper.
+
+## Why this is more than a better diffusion policy
+
+The deeper contribution is a new **coordinate system for robot learning**.
+
+Right now, robot learning often treats trajectories as sequences of action vectors. But sequence time is not the right primitive. The physically meaningful decomposition is something like:
+
+low temporal frequency: intent, route, object displacement, task phase;
+
+mid frequency: approach geometry, obstacle avoidance, grasp alignment, pushing mode;
+
+high frequency: contact correction, compliance, actuator jitter, slip response, force closure;
+
+graph frequency over body: whole-arm coordination versus distal wrist/finger corrections;
+
+object/contact frequency: global scene rearrangement versus local contact-mode transition.
+
+A good robot policy should know which level it is modeling at each denoising step.
+
+That is the “seminal” part: **robot trajectories become natural signals with geometry, spectra, residuals, and saliency.**
+
+## The dangerous pitfalls
+
+The paper should not pretend Fourier alone solves robotics. Pure Fourier assumes stationarity; manipulation is full of phase changes and contact discontinuities. The right implementation likely needs STFTs, wavelets, event-aligned time normalization, and graph spectral bases.
+
+It should not discard phase. The spectral residual saliency method preserves phase when inverse-transforming the residual, which is essential for localization. A trajectory version must also preserve phase or it will know “what frequency” but not “when the event happened.” 
+
+It should not smooth away contact. In many robot tasks, the “ugly” high-frequency component is not noise; it is the task. Peg insertion, scraping, wiping, dynamic catching, and slip recovery may live in precisely the bands a naive smoothness prior would suppress.
+
+It should not confuse action-space and observation-space shifts. Ambient notes that its strong results address action-space distribution shift, while observation-space shift remains open. A trajectory-residual paper should either stay honest about that boundary or extend the residual idea to visual/tactile latent trajectories. 
+
+## A strong paper title and abstract
+
+**Title:**
+**Trajectory Diffusion Is Spectral Skill Autoregression**
+
+**Abstract sketch:**
+Robot trajectories exhibit strong spectral regularities, yet task success is often determined by sparse deviations from these regularities: contacts, mode switches, corrections, and releases. Inspired by spectral autoregression in diffusion models and spectral residual saliency in vision, we introduce Spectral Residual Trajectory Diffusion, a framework that decomposes robot behavior into a predictable spectral envelope and task-critical residuals. We show that residuals localize proto-skill events, that diffusion policies denoise trajectories in a low-to-high frequency hierarchy, and that auxiliary datasets can be routed by spectral compatibility rather than global dataset weights. Across contact-rich manipulation, motion planning, and cross-embodiment imitation, our method improves sample efficiency, smoothness, event precision, and robustness to suboptimal data.
+
+## The one-sentence contribution
+
+**The paper should show that the right unit of robot imitation is not the timestep, the action chunk, or the demonstration, but the spectrally localized residual event.**
+
+[1]: https://sander.ai/2024/09/02/spectral-autoregression.html "Diffusion is spectral autoregression – Sander Dieleman"

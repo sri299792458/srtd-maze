@@ -1,0 +1,952 @@
+I would pick the **2D Maze noisy-trajectory experiment** from Ambient Diffusion Policy as the first implementation target. It is the cleanest smoke test because the task is cheap to simulate, the distribution shift is controlled, and the expected failure mode is exactly spectral: smooth GCS trajectories versus jittery RRT trajectories. Ambient’s setup uses **50 smooth GCS trajectories** as high-quality (D_p), **5,000 cheaper jittery RRT trajectories** as suboptimal (D_q), evaluates success in a fixed 5m × 5m maze, and uses average squared acceleration as the smoothness metric.  Ambient reports that scalar Ambient training gets essentially the same success as co-training but about **2× smoother** on this maze, making it a strong baseline for the spectral-residual version. 
+
+Below is a concrete spec Codex can implement.
+
+# Implementation spec: Spectral Residual Trajectory Diffusion on Ambient 2D Maze
+
+## 0. Goal
+
+Implement and evaluate **Spectral Residual Trajectory Diffusion**, abbreviated **SRTD**, on the Ambient 2D Maze dataset.
+
+The hypothesis:
+
+> RRT trajectories are useful for low-frequency global route information but harmful in high-frequency residual bands. A policy should learn low-frequency route structure from (D_q), suppress high-frequency RRT jitter, and emphasize clean residual events from (D_p), such as turns and obstacle-avoidance corrections.
+
+This combines three ideas:
+
+Sander Dieleman’s diffusion-as-spectral-autoregression observation gives the mapping from diffusion noise level to detectable frequency bands. In his formulation, adding Gaussian noise progressively hides high frequencies first, so diffusion denoising behaves like approximate frequency-space autoregression. ([Sander Dieleman][1])
+
+Hou and Zhang’s spectral residual method gives the innovation operator: compute log amplitude spectrum, subtract a smoothed spectral envelope, preserve phase, and inverse-transform the residual to obtain a saliency map. 
+
+Ambient Diffusion Policy supplies the robotics setting: robot action data exhibits a spectral power law, Diffusion Policies show a global-to-local hierarchy, and suboptimal data can be used at selected diffusion times instead of all times. 
+
+## 1. What Codex should build
+
+Build three new components on top of a Diffusion Policy maze implementation:
+
+1. **Trajectory spectral residual diagnostics**
+   Compute trajectory PSDs, spectral envelopes, residual spectra, and time-localized residual saliency maps for GCS and RRT trajectories.
+
+2. **Spectral-residual Ambient sampler**
+   Replace Ambient’s scalar (t_{\min}) for all RRT data with a **per-chunk (t_{\min}^{SR})** derived from how much bad high-frequency residual remains visible at each diffusion noise level.
+
+3. **Frequency-masked denoising loss**
+   Train on RRT data in frequency space, using low-frequency compatible bands while suppressing high-frequency residual bands that look unlike clean GCS trajectories.
+
+The resulting experiment should compare:
+
+| Name             |                                        Data used | Loss                 | Purpose                         |
+| ---------------- | -----------------------------------------------: | -------------------- | ------------------------------- |
+| `gcs_only`       |                                       (D_p) only | standard x0 MSE      | smooth but underfit baseline    |
+| `rrt_only`       |                                       (D_q) only | standard x0 MSE      | high-coverage, jittery baseline |
+| `cotrain`        |                  (D_p + D_q) all diffusion times | standard x0 MSE      | standard mixed-data baseline    |
+| `ambient_scalar` |           (D_p) all times, (D_q) only high noise | standard x0 MSE      | Ambient baseline                |
+| `sr_tmin`        |  (D_p) all times, (D_q) gated by (t_{\min}^{SR}) | standard x0 MSE      | lowest-risk new method          |
+| `sr_freqmask`    |          (D_p) all times, (D_q) frequency-masked | spectral masked loss | main new method                 |
+| `sr_full`        | (D_p) saliency-weighted + (D_q) frequency-masked | time + spectral loss | full method                     |
+
+## 2. Repository layout
+
+Codex should add this structure:
+
+```text
+srtd/
+  __init__.py
+
+  data/
+    maze2d_dataset.py
+    maze2d_generate.py
+    chunking.py
+    normalization.py
+
+  spectral/
+    fft_ops.py
+    envelope.py
+    residual.py
+    snr.py
+    annotations.py
+    plotting.py
+
+  diffusion/
+    schedules.py
+    temporal_unet.py
+    ddim.py
+
+  training/
+    samplers.py
+    losses.py
+    train_maze2d.py
+    ema.py
+
+  eval/
+    maze_env.py
+    rollout.py
+    metrics.py
+    report.py
+
+  configs/
+    maze2d_gcs_only.yaml
+    maze2d_cotrain.yaml
+    maze2d_ambient_scalar.yaml
+    maze2d_sr_tmin.yaml
+    maze2d_sr_freqmask.yaml
+    maze2d_sr_full.yaml
+
+  tests/
+    test_fft_ops.py
+    test_residual_saliency.py
+    test_snr_monotonic.py
+    test_sampler.py
+    test_losses.py
+```
+
+Use PyTorch. Keep all spectral code framework-native so gradients flow through spectral losses.
+
+## 3. Dataset contract
+
+### 3.1 Expected raw episode format
+
+Every episode should load to:
+
+```python
+@dataclass
+class MazeEpisode:
+    positions: np.ndarray      # float32 [T, 2], absolute xy in meters
+    start: np.ndarray          # float32 [2]
+    goal: np.ndarray           # float32 [2]
+    source: str                # "p" for GCS, "q" for RRT
+    episode_id: int
+```
+
+Use Ambient data if available. Otherwise implement a fallback generator:
+
+* Maze bounds: ([0, 5] \times [0, 5]).
+* Obstacles: load from `assets/maze2d_default.yaml`.
+* (D_p): generate 50 “GCS-like” smoothed paths.
+* (D_q): generate 5,000 RRT paths.
+* Resample every episode to `episode_horizon = 100`.
+* Use 10 Hz.
+* Enforce maximum velocity approximately 1 m/s.
+* Use 0.1 m obstacle padding, matching the Ambient appendix. 
+
+The fallback generator does not need to faithfully reproduce GCS. It needs to reproduce the **spectral contrast**: (D_p) smooth and sparse; (D_q) broad-coverage and jittery.
+
+### 3.2 Chunk format
+
+For policy training, create sliding chunks:
+
+```python
+@dataclass
+class MazeChunk:
+    obs: np.ndarray            # float32 [obs_dim]
+    actions: np.ndarray        # float32 [H, 2], absolute future xy
+    source_id: int             # 0 for p, 1 for q
+    episode_id: int
+    chunk_start: int
+    sr_tmin_idx: int | None
+    sr_bad_score: float | None
+```
+
+Default:
+
+```yaml
+policy_horizon: 16
+execute_horizon: 8
+obs_horizon: 2
+stride: 4
+```
+
+Ambient’s implementation predicts the next 16 actions, executes the first 8 actions in an MPC-like loop, conditions on the two most recent observations, uses a U-Net policy, trains with a cosine noise schedule with (T = 100), and samples online with 10 DDIM steps. 
+
+For the maze, define:
+
+```python
+obs = [
+    prev_xy_normalized,      # [2]
+    curr_xy_normalized,      # [2]
+    goal_xy_normalized       # [2]
+]
+obs_dim = 6
+actions = future_xy_normalized  # [H, 2]
+```
+
+Normalize xy by the maze bounds:
+
+```python
+xy_norm = 2.0 * xy_meters / 5.0 - 1.0
+xy_meters = 2.5 * (xy_norm + 1.0)
+```
+
+Do not fit normalization statistics on eval rollouts.
+
+## 4. Spectral residual core
+
+### 4.1 FFT convention
+
+Actions have shape:
+
+```python
+A: torch.Tensor  # [B, H, D], D=2
+```
+
+Use real FFT along the time axis:
+
+```python
+X = torch.fft.rfft(A, dim=1, norm="ortho")  # [B, F, D]
+amp = torch.abs(X)
+phase = torch.angle(X)
+log_amp = torch.log(amp + eps)
+```
+
+Default:
+
+```yaml
+eps: 1.0e-6
+basis: rfft
+envelope_kernel_size: 3
+```
+
+### 4.2 Local spectral residual
+
+Implement the Hou-Zhang-style residual for each chunk:
+
+[
+L(f,d) = \log(|\hat A(f,d)| + \epsilon)
+]
+
+[
+\bar L(f,d) = \text{AvgPoolFreq}_{k=3}(L)(f,d)
+]
+
+[
+R(f,d) = L(f,d) - \bar L(f,d)
+]
+
+Use reflect padding in frequency before average pooling. Do not smooth across action dimensions.
+
+Function:
+
+```python
+def spectral_residual(
+    actions: torch.Tensor,
+    kernel_size: int = 3,
+    eps: float = 1e-6,
+) -> dict:
+    """
+    actions: [B, H, D]
+    returns:
+      X: complex [B, F, D]
+      log_amp: [B, F, D]
+      smooth_log_amp: [B, F, D]
+      residual: [B, F, D]
+      phase: [B, F, D]
+      saliency_time: [B, H, D]
+      saliency_scalar: [B, H]
+    """
+```
+
+### 4.3 Time-localized saliency
+
+Preserve phase and inverse-transform:
+
+[
+S(t,d)=
+\left|
+\mathcal{F}^{-1}
+\left[
+\exp(R(f,d))e^{i\phi(f,d)}
+\right]
+\right|^2
+]
+
+Then aggregate over dimensions:
+
+[
+S(t)=\sum_d S(t,d)
+]
+
+Normalize per chunk:
+
+```python
+S = S / (S.mean(dim=1, keepdim=True) + eps)
+```
+
+For diagnostics, mark proto-events with:
+
+```python
+event_mask = S > 3.0 * S.mean(dim=1, keepdim=True)
+```
+
+That threshold mirrors Hou and Zhang’s simple proto-object thresholding rule (S(x) > 3E[S(x)]). 
+
+## 5. Clean target spectral envelope
+
+Fit all spectral statistics **only on training chunks from (D_p)**.
+
+```python
+class CleanSpectralStats:
+    clean_log_amp_median: torch.Tensor   # [F, D]
+    clean_log_amp_q90: torch.Tensor      # [F, D]
+    clean_residual_q95: torch.Tensor     # [F, D]
+    clean_psd_mean: torch.Tensor         # [F, D]
+    clean_bad_visible_q95: torch.Tensor  # [T_diffusion]
+```
+
+Fitting procedure:
+
+```python
+for all clean training chunks A_p:
+    X = rfft(A_p)
+    log_amp = log(abs(X) + eps)
+    R = log_amp - avgpool_freq(log_amp, k=3)
+    psd = abs(X)**2
+
+clean_log_amp_median = median(log_amp over chunks)
+clean_log_amp_q90 = quantile(log_amp, 0.90 over chunks)
+clean_residual_q95 = quantile(R, 0.95 over chunks)
+clean_psd_mean = mean(psd over chunks)
+```
+
+Important: save these stats to disk as:
+
+```text
+runs/<run_id>/spectral/clean_stats.pt
+```
+
+## 6. Noise-to-frequency visibility map
+
+Use a VP diffusion process:
+
+[
+A_t = \sqrt{1-\sigma_t^2}A_0 + \sigma_t \epsilon
+]
+
+Estimate target SNR per frequency using clean (D_p) PSD:
+
+[
+\text{SNR}(f,d,t) =
+\frac{(1-\sigma_t^2)P_p(f,d)}
+{\sigma_t^2 + \epsilon}
+]
+
+Define soft visibility:
+
+[
+V(f,d,t)=
+\sigma_{\text{logistic}}
+\left(
+\frac{
+\log(\text{SNR}(f,d,t)+\epsilon)-\log(\tau_{\text{snr}})
+}{
+T_{\text{vis}}
+}
+\right)
+]
+
+Default config:
+
+```yaml
+snr_tau: 1.0
+visibility_temperature: 0.5
+min_visible_weight: 0.02
+```
+
+Function:
+
+```python
+def visibility_mask(
+    clean_psd_mean: torch.Tensor,  # [F, D]
+    sigma: torch.Tensor,           # [B] or scalar
+    tau: float = 1.0,
+    temperature: float = 0.5,
+) -> torch.Tensor:
+    """
+    returns V: [B, F, D]
+    """
+```
+
+Unit-test requirement: as (\sigma_t) increases, the highest visible frequency must be non-increasing.
+
+## 7. Spectral-residual (t_{\min}^{SR}) annotation
+
+This is the first new method and should be implemented before the full loss.
+
+For each chunk, compute “bad residual” relative to the clean residual distribution:
+
+[
+B_i(f,d)=\max(0, R_i(f,d)-Q^{p}_{0.95}(R(f,d))-\delta)
+]
+
+Default:
+
+```yaml
+bad_residual_margin: 0.0
+global_band_cutoff_norm: 0.20
+```
+
+Do not penalize very low frequencies. They encode route/global plan and are the part of RRT we want to keep.
+
+```python
+f_norm = freq_idx / (F - 1)
+high_or_mid_band = f_norm > global_band_cutoff_norm
+B = B * high_or_mid_band
+```
+
+For every candidate diffusion time (t \in {0,\dots,T-1}), compute the residual still visible:
+
+[
+\text{bad_visible}*i(t)=
+\frac{
+\sum*{f,d} B_i(f,d)V(f,d,t)
+}{
+\sum_{f,d} V(f,d,t)+\epsilon
+}
+]
+
+Compute the same score for clean chunks and store:
+
+[
+\eta_p(t) = Q_{0.95}\left(\text{bad_visible}_p(t)\right)
+]
+
+Then for every RRT chunk (i):
+
+[
+t_{\min,i}^{SR}
+===============
+
+\min{t: \text{bad_visible}_i(t)\leq \eta_p(t)}
+]
+
+If no such (t) exists, set `tmin = T`, meaning the chunk is never used.
+
+Function:
+
+```python
+def annotate_sr_tmin(
+    chunks: list[MazeChunk],
+    clean_stats: CleanSpectralStats,
+    schedule: VPSchedule,
+    cfg: SpectralConfig,
+) -> np.ndarray:
+    """
+    returns sr_tmin_idx: int array [num_chunks]
+    """
+```
+
+Save:
+
+```text
+runs/<run_id>/annotations/sr_tmin.npy
+runs/<run_id>/annotations/sr_bad_visible.npy
+runs/<run_id>/figures/sr_tmin_hist.png
+```
+
+## 8. Samplers
+
+### 8.1 Standard sampler
+
+Used for `gcs_only`, `rrt_only`, and `cotrain`.
+
+```python
+sample source according to dataset weights
+sample chunk from source
+sample diffusion timestep uniformly
+```
+
+For co-training, use:
+
+```yaml
+alpha_p: 0.019
+```
+
+as one config, because Ambient reports this as the best 2D maze co-training value.  Also support sweeps.
+
+### 8.2 Ambient scalar sampler
+
+Ambient’s sampler draws diffusion times and then only allows (D_q) samples when the time is admissible; (D_p) is always admissible. 
+
+For the maze:
+
+```yaml
+tmin_sigma_scalar: 0.074
+tmax_sigma_scalar: 0.0
+```
+
+Use a helper to convert sigma threshold to discrete timestep.
+
+### 8.3 Spectral-residual tmin sampler
+
+Same as Ambient scalar, except (D_q) uses per-chunk `sr_tmin_idx`.
+
+```python
+if source == "p":
+    admissible = True
+elif source == "q":
+    admissible = t_idx >= chunk.sr_tmin_idx
+```
+
+This is `sr_tmin`.
+
+## 9. Losses
+
+### 9.1 Standard x0 denoising loss
+
+Use x0-prediction:
+
+```python
+sigma = schedule[t_idx]
+A_t = sqrt(1 - sigma**2) * A0 + sigma * eps
+A0_pred = model(A_t, obs, t_idx)
+loss = mse(A0_pred, A0)
+```
+
+### 9.2 Frequency-domain MSE
+
+Use full complex FFT or rFFT. For simplicity with one-sided rFFT, include real-frequency weights carefully. Easier implementation: use full FFT for the loss.
+
+```python
+def spectral_mse(
+    pred: torch.Tensor,       # [B, H, D]
+    target: torch.Tensor,     # [B, H, D]
+    weights: torch.Tensor,    # [B, H, D] full FFT weights
+) -> torch.Tensor:
+    E = torch.fft.fft(pred - target, dim=1, norm="ortho")
+    loss_fd = (E.real.square() + E.imag.square()) * weights
+    return loss_fd.sum() / (weights.sum() + 1e-8)
+```
+
+Unit test: when `weights = ones`, this should match time-domain MSE up to numerical tolerance by Parseval.
+
+### 9.3 Clean saliency-weighted loss for (D_p)
+
+For clean chunks, emphasize residual-salient timesteps:
+
+```python
+saliency = precomputed_or_online_saliency(A0)  # [B, H]
+saliency = saliency / (saliency.mean(dim=1, keepdim=True) + eps)
+time_weight = 1.0 + beta_clean_saliency * clamp(saliency, max=saliency_clip)
+loss_p = weighted_time_mse(A0_pred, A0, time_weight)
+```
+
+Defaults:
+
+```yaml
+beta_clean_saliency: 0.25
+saliency_clip: 5.0
+```
+
+This is intentionally mild. The clean dataset is tiny, so do not overfit every corner.
+
+### 9.4 RRT frequency-masked loss for (D_q)
+
+For each RRT chunk:
+
+[
+C_i(f,d)=
+\text{sigmoid}
+\left(
+\frac{
+Q^{p}_{0.95}(R(f,d))+\delta-R_i(f,d)
+}{
+T_C
+}
+\right)
+]
+
+This compatibility is near 1 where the RRT residual looks clean-like and near 0 where it has abnormal high-frequency residual.
+
+Always allow low-frequency bands:
+
+```python
+C[:, f_norm <= 0.20, :] = 1.0
+```
+
+Then combine with diffusion-time visibility:
+
+[
+W_i(f,d,t)=V(f,d,t)C_i(f,d)
+]
+
+Clamp low-frequency floor:
+
+```python
+W[:, f_norm <= 0.20, :] = torch.clamp(W[:, f_norm <= 0.20, :], min=0.25)
+W = torch.clamp(W, min=0.0, max=1.0)
+```
+
+Loss:
+
+```python
+loss_q = spectral_mse(A0_pred, A0, full_fft_symmetric(W))
+```
+
+Default:
+
+```yaml
+compat_temperature: 0.25
+low_freq_floor: 0.25
+q_loss_weight: 1.0
+```
+
+### 9.5 Full SRTD batch loss
+
+```python
+if source == "p":
+    loss = loss_p_time_saliency + lambda_p_freq * spectral_mse_all_bands
+elif source == "q":
+    loss = q_loss_weight * loss_q_freq_masked
+```
+
+Defaults:
+
+```yaml
+lambda_p_freq: 0.1
+q_loss_weight: 1.0
+```
+
+For the first implementation, do not combine this with Ambient loss. Use standard denoising MSE so failures are interpretable.
+
+## 10. Training configuration
+
+Base config:
+
+```yaml
+seed: 0
+
+dataset:
+  name: maze2d_ambient
+  clean_source: gcs
+  suboptimal_source: rrt
+  fallback_generate: true
+  num_clean_episodes: 50
+  num_rrt_episodes: 5000
+  episode_horizon: 100
+  policy_horizon: 16
+  execute_horizon: 8
+  stride: 4
+
+model:
+  type: temporal_unet
+  action_dim: 2
+  obs_dim: 6
+  base_channels: 64
+  channel_mults: [1, 2, 4]
+  num_res_blocks: 2
+  dropout: 0.0
+  predict: x0
+
+diffusion:
+  type: vp
+  schedule: cosine
+  train_steps: 100
+  inference_steps: 10
+
+training:
+  batch_size: 256
+  lr: 1.0e-4
+  weight_decay: 1.0e-6
+  total_steps: 200000
+  grad_clip_norm: 1.0
+  ema_decay: 0.999
+  save_every: 10000
+  eval_every: 25000
+  num_workers: 8
+  amp: true
+
+spectral:
+  eps: 1.0e-6
+  basis: rfft
+  envelope_kernel_size: 3
+  snr_tau: 1.0
+  visibility_temperature: 0.5
+  bad_residual_margin: 0.0
+  global_band_cutoff_norm: 0.20
+  compat_temperature: 0.25
+  low_freq_floor: 0.25
+  beta_clean_saliency: 0.25
+  saliency_clip: 5.0
+
+eval:
+  num_trials: 1000
+  same_start_goal_across_policies: true
+  success_radius_m: 0.15
+  timeout_s: 30.0
+  dt: 0.1
+```
+
+## 11. Evaluation
+
+Use exactly the Ambient maze metrics:
+
+Success if the point robot reaches a 0.15 m ball around the goal within 30 s without collision. Smoothness is average squared acceleration computed from a cubic spline fit to the rollout. 
+
+Add SRTD-specific metrics:
+
+```python
+success_rate
+avg_squared_acceleration_success_only
+path_length_success_only
+collision_rate
+endpoint_error
+generated_high_freq_residual_energy
+generated_bad_visible_score
+mean_num_model_steps_to_success
+```
+
+Report:
+
+```text
+policy, seed, success_rate, success_ci_low, success_ci_high,
+smoothness_mean, smoothness_bootstrap_ci_low, smoothness_bootstrap_ci_high,
+path_length_mean,
+hf_residual_energy_mean
+```
+
+Run 5 seeds:
+
+```bash
+python -m srtd.training.train_maze2d --config srtd/configs/maze2d_gcs_only.yaml --seed 0
+...
+python -m srtd.training.train_maze2d --config srtd/configs/maze2d_sr_full.yaml --seed 4
+```
+
+Evaluation command:
+
+```bash
+python -m srtd.eval.report \
+  --runs runs/maze2d_* \
+  --num-trials 1000 \
+  --same-start-goal \
+  --out runs/maze2d_report
+```
+
+## 12. Required figures
+
+Codex should generate these automatically:
+
+```text
+runs/<run_id>/figures/
+  psd_gcs_vs_rrt.png
+  log_spectrum_envelope.png
+  residual_spectrum_examples.png
+  residual_saliency_rollouts.png
+  visibility_mask_vs_t.png
+  sr_tmin_hist.png
+  success_vs_smoothness_pareto.png
+  rollout_grid_same_start_goal.png
+  generated_residual_energy.png
+```
+
+Figure details:
+
+1. **PSD GCS vs RRT**
+   Log-log PSD curves for (x) and (y). Fit slopes. Confirm power-law-like decay.
+
+2. **Residual saliency examples**
+   For 5 GCS and 5 RRT trajectories, plot xy path with saliency as point size. RRT should light up jittery sections; GCS should light up turns.
+
+3. **Visibility mask**
+   Heatmap of frequency index versus diffusion timestep. Low frequencies should remain visible at higher noise; high frequencies should disappear first.
+
+4. **Pareto plot**
+   x-axis: average squared acceleration. y-axis: success rate. Compare all policies.
+
+5. **Rollout grid**
+   Same start-goal pairs across `gcs_only`, `rrt_only`, `cotrain`, `ambient_scalar`, `sr_tmin`, `sr_freqmask`, `sr_full`.
+
+## 13. Acceptance criteria
+
+The implementation is successful if all of these pass:
+
+### Diagnostic gates
+
+1. `mean_high_freq_residual(RRT) > mean_high_freq_residual(GCS)`.
+2. A simple classifier using only high-frequency residual energy gets AUROC ≥ 0.75 for GCS vs RRT chunks.
+3. Visibility mask is monotonic: as noise increases, the maximum visible frequency does not increase.
+4. Residual saliency has positive correlation with squared acceleration on RRT rollouts.
+
+### Policy gates
+
+Using 1,000 shared eval trials per policy:
+
+1. `sr_tmin` should match `ambient_scalar` success within 1–2 percentage points.
+2. `sr_tmin` should be smoother than `cotrain`.
+3. `sr_freqmask` should have lower generated high-frequency residual energy than `cotrain`.
+4. `sr_full` should either:
+
+   * improve smoothness over `ambient_scalar` at statistically similar success, or
+   * improve success over `ambient_scalar` at statistically similar smoothness.
+
+A good first target is:
+
+```text
+success_rate(sr_full) >= success_rate(ambient_scalar) - 0.01
+smoothness(sr_full) <= smoothness(ambient_scalar) * 0.95
+hf_residual_energy(sr_full) <= hf_residual_energy(cotrain) * 0.80
+```
+
+Do not tune against the eval set. Use validation rollouts or a held-out start-goal set.
+
+## 14. Unit tests Codex must implement
+
+### `test_fft_roundtrip`
+
+```python
+A = torch.randn(8, 16, 2)
+X = torch.fft.rfft(A, dim=1, norm="ortho")
+A2 = torch.fft.irfft(X, n=16, dim=1, norm="ortho")
+assert torch.allclose(A, A2, atol=1e-5)
+```
+
+### `test_residual_saliency_spike`
+
+Create a smooth sine trajectory and add one impulse at timestep 8. Saliency max must occur within ±1 timestep of the impulse.
+
+### `test_rrt_jitter_has_higher_residual`
+
+Create a smoothed path and a jittered version. High-frequency residual score must be higher for jittered path.
+
+### `test_visibility_monotonic`
+
+For increasing sigma values, the count of visible high-frequency bins must be non-increasing.
+
+### `test_sampler_admissibility`
+
+For `sr_tmin`:
+
+* (D_p) chunks always admissible.
+* (D_q) chunks not admissible below their `sr_tmin_idx`.
+* (D_q) chunks admissible at or above their `sr_tmin_idx`.
+
+### `test_spectral_mse_parseval`
+
+With all weights set to 1, spectral MSE must equal time-domain MSE within tolerance.
+
+## 15. Main implementation pseudocode
+
+### Training loop
+
+```python
+for step in range(total_steps):
+    batch = sampler.sample(batch_size)
+
+    A0 = batch.actions              # [B, H, 2]
+    obs = batch.obs                 # [B, obs_dim]
+    source = batch.source_id        # [B]
+    t_idx = batch.t_idx             # [B]
+
+    sigma = schedule.sigma[t_idx]   # [B]
+    eps = torch.randn_like(A0)
+    At = sqrt(1 - sigma**2)[:, None, None] * A0 + sigma[:, None, None] * eps
+
+    A0_pred = model(At, obs, t_idx)
+
+    if cfg.method in ["gcs_only", "rrt_only", "cotrain", "ambient_scalar", "sr_tmin"]:
+        loss = mse(A0_pred, A0)
+
+    elif cfg.method == "sr_freqmask":
+        loss = sr_freqmask_loss(A0_pred, A0, source, t_idx, clean_stats, cfg)
+
+    elif cfg.method == "sr_full":
+        loss = sr_full_loss(A0_pred, A0, source, t_idx, clean_stats, cfg)
+
+    optimizer.zero_grad()
+    loss.backward()
+    clip_grad_norm_(model.parameters(), cfg.training.grad_clip_norm)
+    optimizer.step()
+    ema.update(model)
+```
+
+### `sr_full_loss`
+
+```python
+def sr_full_loss(pred, target, source, t_idx, clean_stats, cfg):
+    losses = []
+
+    p_mask = source == 0
+    q_mask = source == 1
+
+    if p_mask.any():
+        sal = spectral_residual(target[p_mask])["saliency_scalar"]  # [Bp, H]
+        sal = sal / (sal.mean(dim=1, keepdim=True) + cfg.eps)
+        sal = sal.clamp(max=cfg.spectral.saliency_clip)
+        time_w = 1.0 + cfg.spectral.beta_clean_saliency * sal
+        loss_p_time = weighted_time_mse(pred[p_mask], target[p_mask], time_w)
+
+        Wp = torch.ones_like_full_fft_weights(target[p_mask])
+        loss_p_freq = spectral_mse(pred[p_mask], target[p_mask], Wp)
+
+        losses.append(loss_p_time + cfg.spectral.lambda_p_freq * loss_p_freq)
+
+    if q_mask.any():
+        Wq_rfft = compute_q_frequency_weights(
+            target[q_mask],
+            t_idx[q_mask],
+            clean_stats,
+            cfg,
+        )
+        Wq_fft = make_symmetric_full_fft_weights(Wq_rfft, H=target.shape[1])
+        loss_q = spectral_mse(pred[q_mask], target[q_mask], Wq_fft)
+        losses.append(cfg.spectral.q_loss_weight * loss_q)
+
+    return sum(losses) / len(losses)
+```
+
+## 16. Practical failure modes and fixes
+
+If `sr_tmin` uses almost no RRT chunks, loosen the threshold:
+
+```yaml
+clean_bad_visible_quantile: 0.99
+bad_residual_margin: 0.1
+global_band_cutoff_norm: 0.30
+```
+
+If `sr_freqmask` underfits global planning, raise the low-frequency floor:
+
+```yaml
+low_freq_floor: 0.5
+global_band_cutoff_norm: 0.25
+```
+
+If SRTD becomes smooth but fails more, the mask is suppressing mid-frequency turns. Inspect `residual_saliency_rollouts.png` and reduce `compat_temperature` aggressiveness or allow mid bands.
+
+If H=16 is too short for stable spectral residuals, keep policy horizon at 16 for comparability but compute annotations from full 100-step episode windows. The training loss can remain chunk-level.
+
+If generated paths cut corners into obstacles, add a collision-margin metric and report it separately; do not hide this under smoothness.
+
+## 17. Codex-ready task prompt
+
+Paste this into Codex:
+
+```text
+Implement Spectral Residual Trajectory Diffusion for the Ambient 2D Maze noisy-trajectory experiment.
+
+Add an `srtd` package with:
+1. maze2d dataset loading/generation,
+2. trajectory spectral residual analysis,
+3. clean target spectral statistics,
+4. SNR-based frequency visibility maps,
+5. per-chunk spectral-residual tmin annotation,
+6. Ambient scalar and spectral-residual samplers,
+7. standard, spectral-masked, and saliency-weighted denoising losses,
+8. training and evaluation scripts,
+9. diagnostic plots,
+10. unit tests.
+
+Use PyTorch. Actions are normalized absolute xy positions with shape [B,H,2]. Default policy horizon is 16, execute horizon is 8, VP cosine diffusion has 100 train steps and 10 DDIM inference steps. The task uses 50 clean GCS-like trajectories as Dp and 5000 RRT trajectories as Dq. If official Ambient data is unavailable, generate a fallback 5m x 5m maze dataset with smooth GCS-like paths and jittery RRT paths.
+
+Implement three new methods:
+- sr_tmin: Dq chunks get per-chunk tmin from spectral residual bad-visible score.
+- sr_freqmask: Dq loss is frequency-masked by clean compatibility and diffusion-time visibility.
+- sr_full: Dp loss is saliency-weighted in time, Dq loss is frequency-masked.
+
+Compare against gcs_only, rrt_only, cotrain, and ambient_scalar. Evaluation uses 1000 shared start-goal trials per policy. Report success, average squared acceleration, path length, collision rate, generated high-frequency residual energy, and confidence intervals. Generate figures for PSDs, residual saliency, visibility masks, tmin histograms, Pareto frontier, and rollout grids.
+
+Do not leak evaluation data into spectral statistics. Fit clean spectral stats only on training Dp chunks. Add tests for FFT roundtrip, residual saliency localization, jitter residual score, visibility monotonicity, sampler admissibility, and spectral MSE Parseval equivalence.
+```
+
+This is the right first experiment because it turns the abstract claim into a concrete falsifiable result: **can we keep the low-frequency route coverage of RRT while suppressing its high-frequency residual jitter better than scalar Ambient gating?**
+
+[1]: https://sander.ai/2024/09/02/spectral-autoregression.html "Diffusion is spectral autoregression – Sander Dieleman"
