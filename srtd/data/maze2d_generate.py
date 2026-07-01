@@ -181,6 +181,7 @@ def generate_fallback_episodes(
     num_rrt: int = 5000,
     horizon: int = 100,
     seed: int = 0,
+    verbose: bool = False,
 ) -> list[MazeEpisode]:
     rng = np.random.default_rng(seed)
     episodes: list[MazeEpisode] = []
@@ -213,10 +214,17 @@ def generate_fallback_episodes(
 
     while sum(e.source == "p" for e in episodes) < num_clean:
         s, g = _sample_pair(env, rng)
-        add_clean(s, g)
-    while sum(e.source == "q" for e in episodes) < num_rrt:
+        if add_clean(s, g) and verbose:
+            clean_count = sum(e.source == "p" for e in episodes)
+            if clean_count == num_clean or clean_count % max(1, num_clean // 5) == 0:
+                print(f"generated clean episodes {clean_count}/{num_clean}", flush=True)
+    rrt_count = 0
+    while rrt_count < num_rrt:
         s, g = _sample_pair(env, rng)
-        add_rrt(s, g)
+        if add_rrt(s, g):
+            rrt_count += 1
+            if verbose and (rrt_count == num_rrt or rrt_count % max(1, num_rrt // 20) == 0):
+                print(f"generated rrt episodes {rrt_count}/{num_rrt}", flush=True)
     return episodes
 
 
@@ -237,6 +245,7 @@ def main() -> None:
         num_rrt=args.num_rrt,
         horizon=args.horizon,
         seed=args.seed,
+        verbose=True,
     )
     save_episodes(Path(args.out), episodes)
     print(f"saved {len(episodes)} episodes to {args.out}")
@@ -244,4 +253,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

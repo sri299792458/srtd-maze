@@ -10,7 +10,7 @@ import torch
 import torch.nn.functional as F
 
 from srtd.config import load_config
-from srtd.data.maze2d_dataset import MazeChunk, build_chunks, load_episodes
+from srtd.data.maze2d_dataset import MazeChunk, build_chunks, load_episodes, save_episodes
 from srtd.data.maze2d_generate import generate_fallback_episodes
 from srtd.diffusion.schedules import VPSchedule
 from srtd.diffusion.temporal_unet import TemporalUNet
@@ -45,17 +45,36 @@ def _load_or_generate(cfg: dict, seed: int):
     dataset_cfg = cfg["dataset"]
     path = dataset_cfg.get("path")
     if path and Path(path).exists():
+        print(f"loading dataset from {path}", flush=True)
         return load_episodes(path)
+    cache_path = dataset_cfg.get("cache_path")
+    if cache_path is None:
+        cache_path = (
+            Path("data/generated")
+            / f"{dataset_cfg.get('name', 'maze2d')}_seed{seed}_"
+            f"p{dataset_cfg.get('num_clean_episodes', 50)}_"
+            f"q{dataset_cfg.get('num_rrt_episodes', 5000)}_"
+            f"h{dataset_cfg.get('episode_horizon', 100)}.npz"
+        )
+    cache_path = Path(cache_path)
+    if cache_path.exists():
+        print(f"loading cached fallback dataset from {cache_path}", flush=True)
+        return load_episodes(cache_path)
     if not dataset_cfg.get("fallback_generate", True):
         raise FileNotFoundError(f"dataset path not found: {path}")
     env = MazeEnv.from_yaml(dataset_cfg.get("maze_yaml", "assets/maze2d_default.yaml"))
-    return generate_fallback_episodes(
+    print(f"generating fallback dataset at {cache_path}", flush=True)
+    episodes = generate_fallback_episodes(
         env,
         num_clean=int(dataset_cfg.get("num_clean_episodes", 50)),
         num_rrt=int(dataset_cfg.get("num_rrt_episodes", 5000)),
         horizon=int(dataset_cfg.get("episode_horizon", 100)),
         seed=seed,
+        verbose=True,
     )
+    save_episodes(cache_path, episodes)
+    print(f"cached fallback dataset at {cache_path}", flush=True)
+    return episodes
 
 
 def _make_sampler(method: str, chunks: list[MazeChunk], schedule: VPSchedule, cfg: dict, seed: int):
@@ -262,4 +281,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

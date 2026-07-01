@@ -8,6 +8,6 @@ build/
 dist/
 *.egg-info/
 runs/
+logs/
 data/generated/
 references/downloads/
-

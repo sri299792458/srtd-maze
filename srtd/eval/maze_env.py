@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -32,6 +32,10 @@ class MazeEnv:
     bounds: tuple[float, float, float, float]
     obstacles: list[RectObstacle]
     padding: float = 0.1
+    _padded_obstacles: list[RectObstacle] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._padded_obstacles = [obs.padded(self.padding) for obs in self.obstacles]
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "MazeEnv":
@@ -45,7 +49,7 @@ class MazeEnv:
 
     @property
     def padded_obstacles(self) -> list[RectObstacle]:
-        return [obs.padded(self.padding) for obs in self.obstacles]
+        return self._padded_obstacles
 
     def in_bounds(self, point: np.ndarray) -> bool:
         xmin, ymin, xmax, ymax = self.bounds
@@ -84,4 +88,3 @@ class MazeEnv:
             if self.is_free(p):
                 return p.astype(np.float32)
         raise RuntimeError("failed to sample a free point")
-

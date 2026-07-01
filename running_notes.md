@@ -33,3 +33,23 @@
   4. samplers and losses,
   5. fallback maze generator and training/evaluation harness,
   6. tests and an initial commit.
+
+## 2026-06-30 Training Launch
+
+- User clarified that the next step should be actual training, not diagnostics.
+- Launched full `sr_full` training for seed 0 with:
+  `CUDA_VISIBLE_DEVICES=1 .venv/bin/python -u -m srtd.training.train_maze2d --config srtd/configs/maze2d_sr_full.yaml --seed 0`
+- Persistent process:
+  - PID: `3631838`
+  - Log: `logs/train_sr_full_seed0.log`
+  - Active run directory: `runs/maze2d_sr_full_seed0_20260630_190733`
+  - GPU: `CUDA_VISIBLE_DEVICES=1`, visible in-process as CUDA device 0.
+- Before relaunching, fixed fallback generation startup cost:
+  - cached generated fallback datasets under `data/generated/`,
+  - added progress logging during fallback generation,
+  - cached padded obstacle rectangles in `MazeEnv` instead of rebuilding them at every collision sample.
+- The first full fallback dataset was cached at:
+  `data/generated/maze2d_fallback_seed0_p50_q5000_h100.npz`
+- Training confirmed started on CUDA:
+  - reached `step=1600`,
+  - loss decreased from `0.221029` at step 100 to `0.029435` at step 1600.
