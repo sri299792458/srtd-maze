@@ -40,6 +40,7 @@ Command:
 Artifacts:
 
 - Tracked metrics copy: `reports/maze2d_seed0_metrics.csv`
+- Full heavy artifact archive: https://github.com/sri299792458/srtd-maze/releases/tag/seed0-results-v1
 - Runtime metrics: `runs/maze2d_seed0_report/metrics.csv`
 - Shared trials: `runs/maze2d_seed0_report/shared_trials.npz`
 - Saved rollout paths: `runs/maze2d_seed0_report/rollout_paths.npz`
@@ -76,4 +77,3 @@ Immediate next technical work should focus on diagnosing the spectral gates befo
 - add diagnostic AUROC/high-frequency residual reports,
 - tune `clean_bad_visible_quantile`, `global_band_cutoff_norm`, and compatibility temperature,
 - compare with a less aggressive `sr_tmin` schedule before expanding to multiple seeds.
-

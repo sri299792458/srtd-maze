@@ -28,3 +28,16 @@ python -m srtd.training.train_maze2d --config srtd/configs/maze2d_sr_tmin.yaml -
 Long training is not run by default. The config defaults mirror the requested
 experiment, but the CLI accepts `--max-steps` for fast smoke tests.
 
+## Seed-0 Results
+
+The lightweight git history tracks source code, configs, tests, and the final
+seed-0 summary metrics in `reports/`.
+
+Heavy runtime artifacts are published as a GitHub Release asset instead of
+being kept in the main branch:
+
+- Release: https://github.com/sri299792458/srtd-maze/releases/tag/seed0-results-v1
+- Asset: `srtd-maze-seed0-results.tar.gz`
+
+The release archive contains `runs/`, `data/generated/`, `logs/`, and
+`references/downloads/`.
