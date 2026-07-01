@@ -56,7 +56,6 @@ spectral:
   saliency_clip: 5.0
   lambda_p_freq: 0.1
   q_loss_weight: 1.0
-  source_loss_weighting: sample
 
 eval:
   num_trials: 8
@@ -64,4 +63,3 @@ eval:
   success_radius_m: 0.15
   timeout_s: 5.0
   dt: 0.1
-

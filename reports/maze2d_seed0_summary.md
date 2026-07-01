@@ -92,8 +92,8 @@ The following issues were fixed after this report was generated:
 - Smoothness now uses a cubic-spline integrated squared acceleration metric.
 - Generated high-frequency residual energy is computed on fixed delta-motion
   windows rather than variable-length absolute rollout paths.
-- `sr_freqmask` and `sr_full` default to per-sample source loss weighting;
-  the previous equal-source behavior remains available as `source_equal`.
+- `sr_freqmask` and `sr_full` use fixed per-sample source loss weighting;
+  the previous equal-source behavior was removed from the prototype.
 - Added diagnostics for fallback-data smoothness/residual gates and
   `sr_tmin` usable fraction.
 

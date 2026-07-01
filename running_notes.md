@@ -100,9 +100,9 @@
   - added a formula test for an oracle `x0` prediction.
 - Replaced finite-difference smoothness with cubic-spline integrated squared acceleration.
 - Changed generated high-frequency residual energy to use fixed windows of delta motion instead of variable-length absolute rollout paths.
-- Made SRTD source loss weighting explicit:
-  - default: `sample`,
-  - old behavior available as `source_equal`.
+- Made SRTD source loss weighting fixed and sample-proportional:
+  - removed the old equal-source compatibility path,
+  - removed the `source_loss_weighting` config knob.
 - Added diagnostics for:
   - fallback smoothness by source,
   - fallback residual energy by source,

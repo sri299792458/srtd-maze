@@ -14,12 +14,11 @@ def test_spectral_mse_parseval():
 def test_combine_source_losses_sample_weighted():
     p_loss = torch.tensor(10.0)
     q_loss = torch.tensor(0.0)
-    loss = combine_source_losses(p_loss, q_loss, n_p=1, n_q=9, source_loss_weighting="sample")
+    loss = combine_source_losses(p_loss, q_loss, n_p=1, n_q=9)
     assert torch.allclose(loss, torch.tensor(1.0))
 
 
-def test_combine_source_losses_source_equal():
+def test_combine_source_losses_single_source():
     p_loss = torch.tensor(10.0)
-    q_loss = torch.tensor(0.0)
-    loss = combine_source_losses(p_loss, q_loss, n_p=1, n_q=9, source_loss_weighting="source_equal")
-    assert torch.allclose(loss, torch.tensor(5.0))
+    loss = combine_source_losses(p_loss, None, n_p=3, n_q=0)
+    assert torch.allclose(loss, p_loss)

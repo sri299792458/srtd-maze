@@ -26,7 +26,6 @@ def combine_source_losses(
     q_loss: torch.Tensor | None,
     n_p: int,
     n_q: int,
-    source_loss_weighting: str = "sample",
 ) -> torch.Tensor:
     losses = []
     if p_loss is not None:
@@ -35,14 +34,8 @@ def combine_source_losses(
         losses.append((q_loss, n_q))
     if not losses:
         raise ValueError("at least one source loss is required")
-    if source_loss_weighting == "source_equal":
-        return sum(loss for loss, _ in losses) / len(losses)
-    if source_loss_weighting == "sample":
-        total = sum(count for _, count in losses)
-        return sum(loss * count for loss, count in losses) / max(total, 1)
-    raise ValueError(
-        "source_loss_weighting must be either 'sample' or 'source_equal'"
-    )
+    total = sum(count for _, count in losses)
+    return sum(loss * count for loss, count in losses) / max(total, 1)
 
 
 def q_frequency_weights(
@@ -88,7 +81,6 @@ def sr_freqmask_loss(
     t_idx: torch.Tensor,
     clean_stats: CleanSpectralStats,
     schedule: VPSchedule,
-    source_loss_weighting: str = "sample",
     **kwargs,
 ) -> torch.Tensor:
     p_loss = None
@@ -112,7 +104,6 @@ def sr_freqmask_loss(
         q_loss,
         int(p_mask.sum().item()),
         int(q_mask.sum().item()),
-        source_loss_weighting=source_loss_weighting,
     )
 
 
@@ -127,7 +118,6 @@ def sr_full_loss(
     saliency_clip: float = 5.0,
     lambda_p_freq: float = 0.1,
     q_loss_weight: float = 1.0,
-    source_loss_weighting: str = "sample",
     eps: float = 1e-6,
     **kwargs,
 ) -> torch.Tensor:
@@ -159,7 +149,6 @@ def sr_full_loss(
         q_loss,
         int(p_mask.sum().item()),
         int(q_mask.sum().item()),
-        source_loss_weighting=source_loss_weighting,
     )
 
 
