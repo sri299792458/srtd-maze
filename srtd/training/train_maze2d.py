@@ -218,6 +218,7 @@ def train(cfg: dict, max_steps: int | None = None) -> Path:
                 visibility_temperature=float(spectral_cfg.get("visibility_temperature", 0.5)),
                 kernel_size=int(spectral_cfg.get("envelope_kernel_size", 3)),
                 eps=float(spectral_cfg.get("eps", 1e-6)),
+                source_loss_weighting=str(spectral_cfg.get("source_loss_weighting", "sample")),
             )
         elif method == "sr_full":
             loss = sr_full_loss(
@@ -239,6 +240,7 @@ def train(cfg: dict, max_steps: int | None = None) -> Path:
                 visibility_temperature=float(spectral_cfg.get("visibility_temperature", 0.5)),
                 kernel_size=int(spectral_cfg.get("envelope_kernel_size", 3)),
                 eps=float(spectral_cfg.get("eps", 1e-6)),
+                source_loss_weighting=str(spectral_cfg.get("source_loss_weighting", "sample")),
             )
         else:
             raise ValueError(f"unknown method: {method}")

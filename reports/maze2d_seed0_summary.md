@@ -51,6 +51,11 @@ Artifacts:
 
 ## Results
 
+Important: these policy metrics were generated before the post-review fixes to
+the DDIM sampler, smoothness metric, rollout residual metric, and SRTD source
+loss weighting. Treat them as historical diagnostic output, not as current
+scientific evidence for or against SRTD.
+
 | policy | success_rate | smoothness_mean | collision_rate | endpoint_error | hf_residual_energy_mean |
 |---|---:|---:|---:|---:|---:|
 | gcs_only | 0.245 | 59.434 | 0.539 | 1.238 | 0.03655 |
@@ -77,3 +82,29 @@ Immediate next technical work should focus on diagnosing the spectral gates befo
 - add diagnostic AUROC/high-frequency residual reports,
 - tune `clean_bad_visible_quantile`, `global_band_cutoff_norm`, and compatibility temperature,
 - compare with a less aggressive `sr_tmin` schedule before expanding to multiple seeds.
+
+## Post-Review Fixes
+
+The following issues were fixed after this report was generated:
+
+- VP DDIM inference now preserves the estimated noise direction for an
+  `x0`-predicting model.
+- Smoothness now uses a cubic-spline integrated squared acceleration metric.
+- Generated high-frequency residual energy is computed on fixed delta-motion
+  windows rather than variable-length absolute rollout paths.
+- `sr_freqmask` and `sr_full` default to per-sample source loss weighting;
+  the previous equal-source behavior remains available as `source_equal`.
+- Added diagnostics for fallback-data smoothness/residual gates and
+  `sr_tmin` usable fraction.
+
+The cached fallback dataset passes the basic data-direction gate under the new
+diagnostics:
+
+```json
+{
+  "smoothness_by_source": {"p": 6.597253882838576, "q": 574.6017420248655},
+  "residual_energy_by_source": {"p": 0.06841986887156963, "q": 0.16783318338394165},
+  "rrt_less_smooth_than_clean": true,
+  "rrt_more_residual_than_clean": true
+}
+```

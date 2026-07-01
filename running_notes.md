@@ -90,3 +90,31 @@
 - Conclusion:
   - The final deliverables are complete for seed 0 on the fallback maze setup.
   - The first run is a useful negative/diagnostic result, not a confirmed win over `ambient_scalar`.
+
+## 2026-07-01 Review Fixes
+
+- Read the external review in `/home/srinivas/.codex/attachments/53e559aa-e4b9-4f6d-9374-4559a254fc7a/pasted-text.txt`.
+- Fixed the VP DDIM sampler:
+  - added `ddim_x0_step`,
+  - deterministic updates now preserve the estimated noise direction,
+  - added a formula test for an oracle `x0` prediction.
+- Replaced finite-difference smoothness with cubic-spline integrated squared acceleration.
+- Changed generated high-frequency residual energy to use fixed windows of delta motion instead of variable-length absolute rollout paths.
+- Made SRTD source loss weighting explicit:
+  - default: `sample`,
+  - old behavior available as `source_equal`.
+- Added diagnostics for:
+  - fallback smoothness by source,
+  - fallback residual energy by source,
+  - `sr_tmin` usable RRT fraction by timestep.
+- Ran diagnostics on the cached fallback dataset:
+  - clean smoothness: `6.597253882838576`,
+  - RRT smoothness: `574.6017420248655`,
+  - clean residual energy: `0.06841986887156963`,
+  - RRT residual energy: `0.16783318338394165`,
+  - both basic data-direction gates passed.
+- Marked the original seed-0 report as historical diagnostic output because it was generated before these fixes.
+- Verification:
+  - `pytest -q`: 13 tests passed.
+  - `compileall`: passed.
+  - one-trial report smoke after fixes completed.

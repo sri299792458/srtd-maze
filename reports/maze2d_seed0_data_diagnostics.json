@@ -1,0 +1,15 @@
+{
+  "smoothness_by_source": {
+    "p": 6.597253882838576,
+    "q": 574.6017420248655
+  },
+  "residual_energy_by_source": {
+    "p": 0.06841986887156963,
+    "q": 0.16783318338394165
+  },
+  "rrt_less_smooth_than_clean": true,
+  "rrt_more_residual_than_clean": true,
+  "num_chunks": 106050,
+  "num_episodes": 5050,
+  "train_steps": 100
+}

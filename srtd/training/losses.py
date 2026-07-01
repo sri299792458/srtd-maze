@@ -21,6 +21,30 @@ def spectral_mse(pred: torch.Tensor, target: torch.Tensor, weights: torch.Tensor
     return loss_fd.sum() / weights.sum().clamp_min(1e-8)
 
 
+def combine_source_losses(
+    p_loss: torch.Tensor | None,
+    q_loss: torch.Tensor | None,
+    n_p: int,
+    n_q: int,
+    source_loss_weighting: str = "sample",
+) -> torch.Tensor:
+    losses = []
+    if p_loss is not None:
+        losses.append((p_loss, n_p))
+    if q_loss is not None:
+        losses.append((q_loss, n_q))
+    if not losses:
+        raise ValueError("at least one source loss is required")
+    if source_loss_weighting == "source_equal":
+        return sum(loss for loss, _ in losses) / len(losses)
+    if source_loss_weighting == "sample":
+        total = sum(count for _, count in losses)
+        return sum(loss * count for loss, count in losses) / max(total, 1)
+    raise ValueError(
+        "source_loss_weighting must be either 'sample' or 'source_equal'"
+    )
+
+
 def q_frequency_weights(
     target: torch.Tensor,
     t_idx: torch.Tensor,
@@ -64,13 +88,15 @@ def sr_freqmask_loss(
     t_idx: torch.Tensor,
     clean_stats: CleanSpectralStats,
     schedule: VPSchedule,
+    source_loss_weighting: str = "sample",
     **kwargs,
 ) -> torch.Tensor:
-    losses: list[torch.Tensor] = []
+    p_loss = None
+    q_loss = None
     p_mask = source_id == 0
     q_mask = source_id == 1
     if p_mask.any():
-        losses.append(F.mse_loss(pred[p_mask], target[p_mask]))
+        p_loss = F.mse_loss(pred[p_mask], target[p_mask])
     if q_mask.any():
         rfft_w = q_frequency_weights(
             target[q_mask],
@@ -80,8 +106,14 @@ def sr_freqmask_loss(
             **kwargs,
         )
         full_w = rfft_to_full_fft_weights(rfft_w, horizon=target.shape[1])
-        losses.append(spectral_mse(pred[q_mask], target[q_mask], full_w))
-    return sum(losses) / len(losses)
+        q_loss = spectral_mse(pred[q_mask], target[q_mask], full_w)
+    return combine_source_losses(
+        p_loss,
+        q_loss,
+        int(p_mask.sum().item()),
+        int(q_mask.sum().item()),
+        source_loss_weighting=source_loss_weighting,
+    )
 
 
 def sr_full_loss(
@@ -95,10 +127,12 @@ def sr_full_loss(
     saliency_clip: float = 5.0,
     lambda_p_freq: float = 0.1,
     q_loss_weight: float = 1.0,
+    source_loss_weighting: str = "sample",
     eps: float = 1e-6,
     **kwargs,
 ) -> torch.Tensor:
-    losses: list[torch.Tensor] = []
+    p_loss = None
+    q_loss = None
     p_mask = source_id == 0
     q_mask = source_id == 1
     if p_mask.any():
@@ -108,7 +142,7 @@ def sr_full_loss(
         loss_p_time = weighted_time_mse(pred[p_mask], target[p_mask], time_weight)
         all_w = torch.ones_like(pred[p_mask])
         loss_p_freq = spectral_mse(pred[p_mask], target[p_mask], all_w)
-        losses.append(loss_p_time + lambda_p_freq * loss_p_freq)
+        p_loss = loss_p_time + lambda_p_freq * loss_p_freq
     if q_mask.any():
         rfft_w = q_frequency_weights(
             target[q_mask],
@@ -119,8 +153,14 @@ def sr_full_loss(
             **kwargs,
         )
         full_w = rfft_to_full_fft_weights(rfft_w, horizon=target.shape[1])
-        losses.append(q_loss_weight * spectral_mse(pred[q_mask], target[q_mask], full_w))
-    return sum(losses) / len(losses)
+        q_loss = q_loss_weight * spectral_mse(pred[q_mask], target[q_mask], full_w)
+    return combine_source_losses(
+        p_loss,
+        q_loss,
+        int(p_mask.sum().item()),
+        int(q_mask.sum().item()),
+        source_loss_weighting=source_loss_weighting,
+    )
 
 
 def add_vp_noise(

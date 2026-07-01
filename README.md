@@ -41,3 +41,8 @@ being kept in the main branch:
 
 The release archive contains `runs/`, `data/generated/`, `logs/`, and
 `references/downloads/`.
+
+The seed-0 policy metrics were generated before the post-review fixes to DDIM
+sampling, cubic-spline smoothness, rollout residual metrics, and SRTD source
+loss weighting. They are retained as historical diagnostics; rerun training and
+evaluation before using policy numbers as evidence.
