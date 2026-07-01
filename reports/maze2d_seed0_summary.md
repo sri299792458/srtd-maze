@@ -1,22 +1,25 @@
 # Maze2D Seed 0 SRTD Report
 
-Generated on 2026-06-30 from the fallback Ambient-style 2D maze dataset.
+Generated on 2026-07-01 from the fallback Ambient-style 2D maze dataset after
+the review fixes to DDIM sampling, smoothness evaluation, generated residual
+energy, and fixed sample-proportional SRTD source loss weighting.
 
 ## Training
 
-All seven seed-0 policies completed 200,000 training steps using the cached fallback dataset:
+All seven seed-0 policies completed 200,000 training steps using the cached
+fallback dataset:
 
 `data/generated/maze2d_fallback_seed0_p50_q5000_h100.npz`
 
 Run directories:
 
-- `gcs_only`: `runs/maze2d_gcs_only_seed0_20260630_192251`
-- `rrt_only`: `runs/maze2d_rrt_only_seed0_20260630_192251`
-- `cotrain`: `runs/maze2d_cotrain_seed0_20260630_192251`
-- `ambient_scalar`: `runs/maze2d_ambient_scalar_seed0_20260630_192251`
-- `sr_tmin`: `runs/maze2d_sr_tmin_seed0_20260630_192350`
-- `sr_freqmask`: `runs/maze2d_sr_freqmask_seed0_20260630_192251`
-- `sr_full`: `runs/maze2d_sr_full_seed0_20260630_190733`
+- `gcs_only`: `runs/maze2d_gcs_only_seed0_20260701_072457`
+- `rrt_only`: `runs/maze2d_rrt_only_seed0_20260701_073116`
+- `cotrain`: `runs/maze2d_cotrain_seed0_20260701_073116`
+- `ambient_scalar`: `runs/maze2d_ambient_scalar_seed0_20260701_073116`
+- `sr_tmin`: `runs/maze2d_sr_tmin_seed0_20260701_073116`
+- `sr_freqmask`: `runs/maze2d_sr_freqmask_seed0_20260701_072457`
+- `sr_full`: `runs/maze2d_sr_full_seed0_20260701_073116`
 
 ## Evaluation
 
@@ -25,86 +28,73 @@ Command:
 ```bash
 .venv/bin/python -m srtd.eval.report \
   --runs \
-  runs/maze2d_gcs_only_seed0_20260630_192251 \
-  runs/maze2d_rrt_only_seed0_20260630_192251 \
-  runs/maze2d_cotrain_seed0_20260630_192251 \
-  runs/maze2d_ambient_scalar_seed0_20260630_192251 \
-  runs/maze2d_sr_tmin_seed0_20260630_192350 \
-  runs/maze2d_sr_freqmask_seed0_20260630_192251 \
-  runs/maze2d_sr_full_seed0_20260630_190733 \
+  runs/maze2d_gcs_only_seed0_20260701_072457 \
+  runs/maze2d_rrt_only_seed0_20260701_073116 \
+  runs/maze2d_cotrain_seed0_20260701_073116 \
+  runs/maze2d_ambient_scalar_seed0_20260701_073116 \
+  runs/maze2d_sr_tmin_seed0_20260701_073116 \
+  runs/maze2d_sr_freqmask_seed0_20260701_072457 \
+  runs/maze2d_sr_full_seed0_20260701_073116 \
   --num-trials 1000 \
-  --out runs/maze2d_seed0_report \
+  --out runs/maze2d_seed0_retrain_20260701_report \
+  --seed 0 \
   --save-rollouts 5
 ```
 
 Artifacts:
 
 - Tracked metrics copy: `reports/maze2d_seed0_metrics.csv`
-- Full heavy artifact archive: https://github.com/sri299792458/srtd-maze/releases/tag/seed0-results-v1
-- Runtime metrics: `runs/maze2d_seed0_report/metrics.csv`
-- Shared trials: `runs/maze2d_seed0_report/shared_trials.npz`
-- Saved rollout paths: `runs/maze2d_seed0_report/rollout_paths.npz`
-- Pareto figure: `runs/maze2d_seed0_report/success_vs_smoothness_pareto.png`
-- Residual energy figure: `runs/maze2d_seed0_report/generated_residual_energy.png`
-- Success/collision figure: `runs/maze2d_seed0_report/success_collision_rates.png`
-- Rollout grid: `runs/maze2d_seed0_report/rollout_grid_same_start_goal.png`
+- Runtime metrics: `runs/maze2d_seed0_retrain_20260701_report/metrics.csv`
+- Shared trials: `runs/maze2d_seed0_retrain_20260701_report/shared_trials.npz`
+- Saved rollout paths: `runs/maze2d_seed0_retrain_20260701_report/rollout_paths.npz`
+- Pareto figure: `runs/maze2d_seed0_retrain_20260701_report/success_vs_smoothness_pareto.png`
+- Residual energy figure: `runs/maze2d_seed0_retrain_20260701_report/generated_residual_energy.png`
+- Success/collision figure: `runs/maze2d_seed0_retrain_20260701_report/success_collision_rates.png`
+- Rollout grid: `runs/maze2d_seed0_retrain_20260701_report/rollout_grid_same_start_goal.png`
+
+The heavy runtime artifacts are local and ignored by git. No new release asset
+has been published for this rerun.
 
 ## Results
 
-Important: these policy metrics were generated before the post-review fixes to
-the DDIM sampler, smoothness metric, rollout residual metric, and SRTD source
-loss weighting. Treat them as historical diagnostic output, not as current
-scientific evidence for or against SRTD.
-
 | policy | success_rate | smoothness_mean | collision_rate | endpoint_error | hf_residual_energy_mean |
 |---|---:|---:|---:|---:|---:|
-| gcs_only | 0.245 | 59.434 | 0.539 | 1.238 | 0.03655 |
-| rrt_only | 0.635 | 12.120 | 0.071 | 0.247 | 0.01963 |
-| cotrain | 0.662 | 11.785 | 0.074 | 0.238 | 0.01950 |
-| ambient_scalar | 0.759 | 14.056 | 0.120 | 0.252 | 0.02142 |
-| sr_tmin | 0.545 | 25.950 | 0.143 | 0.362 | 0.02274 |
-| sr_freqmask | 0.744 | 22.813 | 0.049 | 0.223 | 0.02356 |
-| sr_full | 0.688 | 20.096 | 0.051 | 0.246 | 0.02318 |
+| gcs_only | 0.244 | 140.004 | 0.540 | 1.238 | 0.43420 |
+| rrt_only | 0.756 | 32.395 | 0.084 | 0.255 | 0.32379 |
+| cotrain | 0.770 | 31.236 | 0.069 | 0.239 | 0.31982 |
+| ambient_scalar | 0.795 | 37.310 | 0.117 | 0.272 | 0.31980 |
+| sr_tmin | 0.640 | 54.834 | 0.180 | 0.402 | 0.32207 |
+| sr_freqmask | 0.873 | 63.019 | 0.075 | 0.221 | 0.29376 |
+| sr_full | 0.836 | 69.766 | 0.027 | 0.224 | 0.32925 |
 
 ## Interpretation
 
-This seed-0 fallback experiment completed successfully, but it does not validate the main SRTD policy hypothesis yet.
+This post-fix seed-0 fallback experiment supports the spectral-mask policy
+hypothesis on success rate.
 
-- `ambient_scalar` achieved the best success rate: `0.759`.
-- `sr_freqmask` was close in success: `0.744`, and had the lowest collision rate: `0.049`.
-- `sr_full` improved over `cotrain` on success (`0.688` vs `0.662`) and collision rate (`0.051` vs `0.074`), but was less smooth than `cotrain`.
-- `sr_tmin` underperformed, which suggests the current per-chunk `tmin` criterion is too restrictive or poorly calibrated on the fallback generator.
-- The SRTD variants did not meet the target policy gate against `ambient_scalar` in this first fallback run.
+- `sr_freqmask` achieved the best success rate: `0.873`, with 95% CI
+  `[0.852, 0.894]`.
+- `ambient_scalar` remained a strong baseline at `0.795`, with 95% CI
+  `[0.770, 0.820]`.
+- `sr_full` was second on success at `0.836` and had the lowest collision rate:
+  `0.027`.
+- `sr_freqmask` also had the lowest generated high-frequency residual energy:
+  `0.29376`.
+- `sr_tmin` still underperformed at `0.640`, suggesting the current per-chunk
+  `tmin` criterion remains too restrictive or poorly calibrated.
+- The SRTD variants trade off smoothness under the cubic-spline acceleration
+  metric; both high-performing SRTD policies are less smooth than
+  `ambient_scalar`.
 
-Immediate next technical work should focus on diagnosing the spectral gates before more expensive sweeps:
+Next technical work should focus on stress-testing this result:
 
-- inspect the `sr_tmin` histogram and usable RRT fraction by diffusion timestep,
-- add diagnostic AUROC/high-frequency residual reports,
-- tune `clean_bad_visible_quantile`, `global_band_cutoff_norm`, and compatibility temperature,
-- compare with a less aggressive `sr_tmin` schedule before expanding to multiple seeds.
+- repeat over multiple seeds,
+- inspect `sr_tmin` usable RRT fraction by diffusion timestep,
+- tune `global_band_cutoff_norm`, `compat_temperature`, and residual margins,
+- compare `sr_freqmask` against a less aggressive `sr_tmin` schedule.
 
-## Post-Review Fixes
+## Historical Note
 
-The following issues were fixed after this report was generated:
-
-- VP DDIM inference now preserves the estimated noise direction for an
-  `x0`-predicting model.
-- Smoothness now uses a cubic-spline integrated squared acceleration metric.
-- Generated high-frequency residual energy is computed on fixed delta-motion
-  windows rather than variable-length absolute rollout paths.
-- `sr_freqmask` and `sr_full` use fixed per-sample source loss weighting;
-  the previous equal-source behavior was removed from the prototype.
-- Added diagnostics for fallback-data smoothness/residual gates and
-  `sr_tmin` usable fraction.
-
-The cached fallback dataset passes the basic data-direction gate under the new
-diagnostics:
-
-```json
-{
-  "smoothness_by_source": {"p": 6.597253882838576, "q": 574.6017420248655},
-  "residual_energy_by_source": {"p": 0.06841986887156963, "q": 0.16783318338394165},
-  "rrt_less_smooth_than_clean": true,
-  "rrt_more_residual_than_clean": true
-}
-```
+The earlier 2026-06-30 seed-0 report was generated before the review fixes and
+is treated as historical diagnostic output. The metrics in this file and
+`reports/maze2d_seed0_metrics.csv` are from the 2026-07-01 rerun.

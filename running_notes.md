@@ -90,6 +90,7 @@
 - Conclusion:
   - The final deliverables are complete for seed 0 on the fallback maze setup.
   - The first run is a useful negative/diagnostic result, not a confirmed win over `ambient_scalar`.
+  - Superseded as current evidence by the 2026-07-01 post-fix rerun below.
 
 ## 2026-07-01 Review Fixes
 
@@ -118,3 +119,35 @@
   - `pytest -q`: 13 tests passed.
   - `compileall`: passed.
   - one-trial report smoke after fixes completed.
+
+## 2026-07-01 Post-Fix Seed-0 Rerun
+
+- Retrained all seven seed-0 policies for 200,000 steps after the review fixes
+  and after removing the equal-source compatibility path:
+  - `runs/maze2d_gcs_only_seed0_20260701_072457`
+  - `runs/maze2d_rrt_only_seed0_20260701_073116`
+  - `runs/maze2d_cotrain_seed0_20260701_073116`
+  - `runs/maze2d_ambient_scalar_seed0_20260701_073116`
+  - `runs/maze2d_sr_tmin_seed0_20260701_073116`
+  - `runs/maze2d_sr_freqmask_seed0_20260701_072457`
+  - `runs/maze2d_sr_full_seed0_20260701_073116`
+- Ran the 1,000 shared-trial evaluation:
+  `python -m srtd.eval.report --runs <seven post-fix run dirs> --num-trials 1000 --out runs/maze2d_seed0_retrain_20260701_report --seed 0 --save-rollouts 5`
+- Updated tracked report files:
+  - `reports/maze2d_seed0_metrics.csv`
+  - `reports/maze2d_seed0_summary.md`
+- Runtime report artifacts:
+  - `runs/maze2d_seed0_retrain_20260701_report/metrics.csv`
+  - `runs/maze2d_seed0_retrain_20260701_report/success_vs_smoothness_pareto.png`
+  - `runs/maze2d_seed0_retrain_20260701_report/generated_residual_energy.png`
+  - `runs/maze2d_seed0_retrain_20260701_report/success_collision_rates.png`
+  - `runs/maze2d_seed0_retrain_20260701_report/rollout_grid_same_start_goal.png`
+- Key result:
+  - `sr_freqmask` had the best success rate at `0.873`.
+  - `sr_full` was second on success at `0.836` and had the lowest collision rate at `0.027`.
+  - `ambient_scalar` remained strong at `0.795`, but was below `sr_freqmask`.
+  - `sr_tmin` still underperformed at `0.640`.
+  - `sr_freqmask` also had the lowest generated high-frequency residual energy at `0.2937557602347806`.
+- Conclusion:
+  - The post-fix seed-0 fallback rerun supports the spectral-mask objective on success.
+  - This is still a single-seed fallback result; next step is multi-seed stress testing and `sr_tmin` gate tuning.

@@ -33,16 +33,17 @@ experiment, but the CLI accepts `--max-steps` for fast smoke tests.
 The lightweight git history tracks source code, configs, tests, and the final
 seed-0 summary metrics in `reports/`.
 
-Heavy runtime artifacts are published as a GitHub Release asset instead of
-being kept in the main branch:
+Current post-fix seed-0 rerun:
 
-- Release: https://github.com/sri299792458/srtd-maze/releases/tag/seed0-results-v1
-- Asset: `srtd-maze-seed0-results.tar.gz`
+- Summary: `reports/maze2d_seed0_summary.md`
+- Metrics: `reports/maze2d_seed0_metrics.csv`
+- Runtime report directory: `runs/maze2d_seed0_retrain_20260701_report`
 
-The release archive contains `runs/`, `data/generated/`, `logs/`, and
-`references/downloads/`.
+Key post-fix result: `sr_freqmask` reached `0.873` success on 1000 shared
+trials, ahead of `ambient_scalar` at `0.795`; `sr_full` reached `0.836` and had
+the lowest collision rate at `0.027`.
 
-The seed-0 policy metrics were generated before the post-review fixes to DDIM
-sampling, cubic-spline smoothness, rollout residual metrics, and SRTD source
-loss weighting. They are retained as historical diagnostics; rerun training and
-evaluation before using policy numbers as evidence.
+Heavy runtime artifacts are ignored locally and are not kept in the main
+branch. The existing GitHub Release asset
+`srtd-maze-seed0-results.tar.gz` is the pre-fix historical run archive:
+https://github.com/sri299792458/srtd-maze/releases/tag/seed0-results-v1
