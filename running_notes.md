@@ -53,3 +53,40 @@
 - Training confirmed started on CUDA:
   - reached `step=1600`,
   - loss decreased from `0.221029` at step 100 to `0.029435` at step 1600.
+
+## 2026-06-30 Final Seed-0 Deliverables
+
+- Completed 200,000 training steps for all seven seed-0 policies:
+  - `gcs_only`
+  - `rrt_only`
+  - `cotrain`
+  - `ambient_scalar`
+  - `sr_tmin`
+  - `sr_freqmask`
+  - `sr_full`
+- Final checkpoint directories:
+  - `runs/maze2d_gcs_only_seed0_20260630_192251`
+  - `runs/maze2d_rrt_only_seed0_20260630_192251`
+  - `runs/maze2d_cotrain_seed0_20260630_192251`
+  - `runs/maze2d_ambient_scalar_seed0_20260630_192251`
+  - `runs/maze2d_sr_tmin_seed0_20260630_192350`
+  - `runs/maze2d_sr_freqmask_seed0_20260630_192251`
+  - `runs/maze2d_sr_full_seed0_20260630_190733`
+- Ran the final 1,000 shared-trial report:
+  `python -m srtd.eval.report --runs <seven run dirs> --num-trials 1000 --out runs/maze2d_seed0_report --save-rollouts 5`
+- Final report artifacts:
+  - `runs/maze2d_seed0_report/metrics.csv`
+  - `runs/maze2d_seed0_report/success_vs_smoothness_pareto.png`
+  - `runs/maze2d_seed0_report/generated_residual_energy.png`
+  - `runs/maze2d_seed0_report/success_collision_rates.png`
+  - `runs/maze2d_seed0_report/rollout_grid_same_start_goal.png`
+  - `reports/maze2d_seed0_metrics.csv`
+  - `reports/maze2d_seed0_summary.md`
+- Key result:
+  - `ambient_scalar` had the best success rate at `0.759`.
+  - `sr_freqmask` was close at `0.744` and had the lowest collision rate at `0.049`.
+  - `sr_full` beat `cotrain` on success (`0.688` vs `0.662`) and collision rate (`0.051` vs `0.074`) but was less smooth.
+  - `sr_tmin` underperformed at `0.545`, suggesting the current per-chunk spectral `tmin` gate is too restrictive or poorly calibrated.
+- Conclusion:
+  - The final deliverables are complete for seed 0 on the fallback maze setup.
+  - The first run is a useful negative/diagnostic result, not a confirmed win over `ambient_scalar`.
