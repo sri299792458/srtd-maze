@@ -296,3 +296,58 @@
 - Important caveat:
   - the 2026-07-01 audited 3-seed metrics predate this cadence fix and should
     be treated as historical diagnostic artifacts until rerun.
+
+## 2026-07-02 Fixed-Cadence Re-Evaluation
+
+- Re-evaluated the existing 15 audited checkpoints from
+  `logs/audit3seed_20260701_213340_manifest.txt` after the rollout
+  observation-cadence fix.
+- Checkpoints were not retrained for this pass; only evaluation changed.
+- Ran the primary fixed-cadence filtered/padded report:
+  `python -m srtd.eval.report --runs <15 manifest runs> --num-trials 1000 --out runs/audit3seed_filtered_padded_fixedcadence_20260702_report --seed 0 --save-rollouts 5 --execution-mode filtered --lowpass-alpha 0.35 --interpolation-steps 4 --primary-collision-padding padded`
+- Ran the fixed-cadence raw/padded companion report:
+  `python -m srtd.eval.report --runs <15 manifest runs> --num-trials 1000 --out runs/audit3seed_raw_padded_fixedcadence_20260702_report --seed 0 --save-rollouts 5 --execution-mode raw --interpolation-steps 4 --primary-collision-padding padded`
+- Tracked fixed-cadence outputs:
+  - `reports/maze2d_audit3seed_fixedcadence_summary.md`
+  - `reports/maze2d_audit3seed_fixedcadence_aggregate.csv`
+  - `reports/maze2d_audit3seed_fixedcadence_filtered_padded_metrics.csv`
+  - `reports/maze2d_audit3seed_fixedcadence_raw_padded_metrics.csv`
+  - `reports/maze2d_audit3seed_fixedcadence_filtered_padded_paired_stats.csv`
+  - `reports/maze2d_audit3seed_fixedcadence_raw_padded_paired_stats.csv`
+- Local reproducibility bundle:
+  - `runs/audit3seed_fixedcadence_repro_20260702.tar.gz`
+  - size: about 293 MB
+  - includes all three generated datasets, all 15 final checkpoints/configs,
+    spectral annotations/figures, both fixed-cadence report directories,
+    `trial_metrics.csv`, `paired_stats.csv`, and `SHA256SUMS.json`
+- Main filtered/padded fixed-cadence aggregate result:
+  - `sr_freqmask`: `0.488 +/- 0.025` success, `0.443 +/- 0.037` collision
+  - `sr_freqmask_shuffled_clean_stats`: `0.457 +/- 0.009` success,
+    `0.471 +/- 0.003` collision
+  - `cotrain`: `0.419 +/- 0.015` success, `0.467 +/- 0.020` collision
+  - `ambient_sampler_x0_mse`: `0.309 +/- 0.020` success
+  - `ambient_scalar_ambient_loss`: `0.106 +/- 0.021` success
+- Raw/padded fixed-cadence companion result:
+  - `sr_freqmask`: `0.544 +/- 0.031` success
+  - `sr_freqmask_shuffled_clean_stats`: `0.535 +/- 0.008` success
+  - `cotrain`: `0.531 +/- 0.014` success
+  - `ambient_sampler_x0_mse`: `0.408 +/- 0.013` success
+  - `ambient_scalar_ambient_loss`: `0.129 +/- 0.012` success
+- Key paired statistics:
+  - filtered/padded `sr_freqmask - cotrain`: `+0.069` success,
+    95% paired bootstrap CI `[+0.029, +0.103]`
+  - filtered/padded `sr_freqmask - sr_freqmask_shuffled_clean_stats`: `+0.031`
+    success, 95% paired bootstrap CI `[-0.005, +0.064]`
+  - raw/padded `sr_freqmask - cotrain`: `+0.013` success,
+    95% paired bootstrap CI `[-0.015, +0.042]`
+  - raw/padded `sr_freqmask - sr_freqmask_shuffled_clean_stats`: `+0.009`
+    success, 95% paired bootstrap CI `[-0.023, +0.038]`
+- Interpretation:
+  - the cadence fix modestly improves most policies,
+  - `sr_freqmask` keeps a modest success advantage in the primary
+    filtered/padded setting,
+  - raw/padded evaluation makes the advantage over `cotrain` very small,
+  - the shuffled-clean-stats ablation remains too close to establish clean
+    spectral residual compatibility as the mechanism,
+  - `cotrain` remains smoother and lower in delta-motion high-frequency
+    residual energy than frequency-mask variants.

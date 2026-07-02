@@ -32,30 +32,32 @@ experiment, but the CLI accepts `--max-steps` for fast smoke tests.
 
 The current audited result is tracked in:
 
-- Summary: `reports/maze2d_audit3seed_summary.md`
-- Aggregate metrics: `reports/maze2d_audit3seed_aggregate.csv`
-- Filtered/padded per-run metrics: `reports/maze2d_audit3seed_filtered_padded_metrics.csv`
-- Raw/padded per-run metrics: `reports/maze2d_audit3seed_raw_padded_metrics.csv`
-- Local reproducibility bundle: `runs/audit3seed_repro_20260701.tar.gz`
+- Summary: `reports/maze2d_audit3seed_fixedcadence_summary.md`
+- Aggregate metrics: `reports/maze2d_audit3seed_fixedcadence_aggregate.csv`
+- Filtered/padded per-run metrics: `reports/maze2d_audit3seed_fixedcadence_filtered_padded_metrics.csv`
+- Raw/padded per-run metrics: `reports/maze2d_audit3seed_fixedcadence_raw_padded_metrics.csv`
+- Paired statistics:
+  `reports/maze2d_audit3seed_fixedcadence_filtered_padded_paired_stats.csv`
+  and `reports/maze2d_audit3seed_fixedcadence_raw_padded_paired_stats.csv`
+- Local reproducibility bundle:
+  `runs/audit3seed_fixedcadence_repro_20260702.tar.gz`
 
 Key audited result: `sr_freqmask` has the best mean success across three
-seeds, but only narrowly. In the primary filtered/padded report it reaches
-`0.470 +/- 0.018` success versus `cotrain` at `0.405 +/- 0.026` and
-`sr_freqmask_shuffled_clean_stats` at `0.463 +/- 0.016`. In the raw/padded
-companion report it reaches `0.522 +/- 0.010` versus `cotrain` at
-`0.498 +/- 0.019`.
+seeds, but the effect remains modest and mechanism-ambiguous. In the primary
+filtered/padded fixed-cadence report it reaches `0.488 +/- 0.025` success
+versus `cotrain` at `0.419 +/- 0.015` and
+`sr_freqmask_shuffled_clean_stats` at `0.457 +/- 0.009`. In the raw/padded
+fixed-cadence companion report it reaches `0.544 +/- 0.031` versus `cotrain`
+at `0.531 +/- 0.014`.
 
 Important caveat: this is a diagnostic research result, not a clean proof of
 the mechanism. The shuffled-clean-stats ablation is very close to the full
 frequency mask, and the faithful VP Ambient x0-loss baseline performs poorly
 enough that it should be audited further before making claims about Ambient
 Diffusion Policy itself.
-
-Additional caveat: these tracked 2026-07-01 numbers were generated before the
-rollout observation-cadence fix. Interpolation is now used only for
-collision/smoothness measurement; `obs_prev` and `obs_curr` stay at the 10 Hz
-policy cadence used during training. Rerun the audit before comparing new
-results against the CSVs above.
+The older 2026-07-01 audited report is retained as a historical artifact in
+`reports/maze2d_audit3seed_summary.md`; it predates the rollout
+observation-cadence fix.
 
 ## Next Controlled Audit
 

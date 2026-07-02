@@ -5,6 +5,8 @@ Generated on 2026-07-01 from the audited fallback Maze2D sweep after adding the 
 Note: these metrics predate the 2026-07-02 rollout observation-cadence fix.
 They should be treated as historical diagnostic results until the same runs or
 newly trained policies are re-evaluated with fixed-cadence interpolation.
+The current corrected report is
+`reports/maze2d_audit3seed_fixedcadence_summary.md`.
 
 ## Training
 
