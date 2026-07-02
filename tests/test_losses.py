@@ -57,7 +57,10 @@ def test_q_frequency_weight_ablation_modes_are_valid():
         "visibility_only",
         "compatibility_only",
         "lowfreq_only",
+        "constant_lowpass_mask",
+        "random_mask_same_density",
         "shuffled_clean_stats",
+        "shuffled_target_residuals",
     ]
     weights = [
         q_frequency_weights(target, t_idx, stats, schedule, mask_mode=mode)

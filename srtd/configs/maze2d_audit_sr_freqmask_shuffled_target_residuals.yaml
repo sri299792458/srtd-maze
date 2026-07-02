@@ -1,0 +1,4 @@
+extends: maze2d_audit_base.yaml
+method: sr_freqmask_shuffled_target_residuals
+spectral:
+  mask_mode: shuffled_target_residuals

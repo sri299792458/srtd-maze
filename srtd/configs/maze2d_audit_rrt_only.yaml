@@ -1,2 +1,2 @@
 extends: maze2d_audit_base.yaml
-method: cotrain
+method: rrt_only

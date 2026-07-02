@@ -2,6 +2,10 @@
 
 Generated on 2026-07-01 from the audited fallback Maze2D sweep after adding the Diffusion Policy `squaredcos_cap_v2` VP schedule, true VP Ambient x0-loss baseline, filtered execution, padded collision reporting, and the frequency-mask ablations requested by review.
 
+Note: these metrics predate the 2026-07-02 rollout observation-cadence fix.
+They should be treated as historical diagnostic results until the same runs or
+newly trained policies are re-evaluated with fixed-cadence interpolation.
+
 ## Training
 
 The sweep trained five policy families over seeds 0, 1, and 2, for 15 total runs:

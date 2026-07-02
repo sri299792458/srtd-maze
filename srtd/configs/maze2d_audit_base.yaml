@@ -1,0 +1,3 @@
+extends: maze2d_base.yaml
+diffusion:
+  schedule: diffusion_policy_cosine

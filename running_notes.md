@@ -257,3 +257,42 @@
     conclusion about Ambient Diffusion Policy.
   - The current result is a useful diagnostic research deliverable, not a
     clean positive paper result.
+
+## 2026-07-02 Audit Review Patch
+
+- Read the external review in
+  `/home/srinivas/.codex/attachments/843e8ebd-452b-4ac1-9b4e-7bd2d9cc8a43/pasted-text.txt`.
+- Fixed the rollout interpolation bug called out in review:
+  - dense interpolation points are still used for collision and smoothness,
+  - policy observations now keep separate `obs_prev`/`obs_curr` state at the
+    10 Hz command cadence used during training,
+  - interpolation substeps no longer alter the model observation distribution.
+- Report changes:
+  - added per-trial `trial_metrics.csv`,
+  - added pairwise `paired_stats.csv` with McNemar exact p-values and paired
+    bootstrap confidence intervals for success differences,
+  - changed rollout path keys to include seed labels so multi-seed grids do
+    not overwrite earlier seeds,
+  - aggregate summary plots now use policy means instead of duplicated labels,
+  - split high-frequency residual reporting into absolute-position and
+    delta-motion metrics,
+  - replaced `-inf` clearance means with:
+    - `out_of_bounds_rate`,
+    - success-only finite clearance,
+    - collision-free finite clearance,
+    - all-run finite clipped clearance.
+- Added compact config inheritance through `extends`.
+- Added next-audit configs for:
+  - `gcs_only` and `rrt_only`,
+  - Ambient sampler x0-MSE at `tmin_idx = 4, 18, 30`,
+  - Ambient x0-loss at `tmin_idx = 4, 18, 30` and buffer
+    `10, 100, 1000, inf`,
+  - frequency-mask ablations:
+    `visibility_only`, `compatibility_only`, `lowfreq_only`,
+    `constant_lowpass_mask`, `random_mask_same_density`,
+    `shuffled_clean_stats`, and `shuffled_target_residuals`.
+- Added `run_label` support so sweep variants can share a training method
+  while producing distinct run directories and report labels.
+- Important caveat:
+  - the 2026-07-01 audited 3-seed metrics predate this cadence fix and should
+    be treated as historical diagnostic artifacts until rerun.

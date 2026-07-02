@@ -3,12 +3,13 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+from itertools import combinations
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from scipy.stats import beta
+from scipy.stats import beta, binomtest
 
 from srtd.diffusion.schedules import make_vp_schedule
 from srtd.diffusion.temporal_unet import TemporalUNet
@@ -28,9 +29,12 @@ POLICY_ORDER = {
     "sr_freqmask_visibility_only": 7,
     "sr_freqmask_compatibility_only": 8,
     "sr_freqmask_lowfreq_only": 9,
-    "sr_freqmask_shuffled_clean_stats": 10,
-    "rrt_only_freqmask": 11,
-    "sr_full": 12,
+    "sr_freqmask_constant_lowpass_mask": 10,
+    "sr_freqmask_random_mask_same_density": 11,
+    "sr_freqmask_shuffled_clean_stats": 12,
+    "sr_freqmask_shuffled_target_residuals": 13,
+    "rrt_only_freqmask": 14,
+    "sr_full": 15,
 }
 
 
@@ -49,6 +53,38 @@ def _bootstrap_ci(values: list[float], rng: np.random.Generator, reps: int = 100
     arr = np.asarray(values, dtype=np.float64)
     means = [rng.choice(arr, size=len(arr), replace=True).mean() for _ in range(reps)]
     return float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975))
+
+
+def _mean_finite(values: list[float]) -> float:
+    arr = np.asarray(values, dtype=np.float64)
+    arr = arr[np.isfinite(arr)]
+    return float(arr.mean()) if len(arr) else float("nan")
+
+
+def _mean_clipped(values: list[float], floor: float) -> float:
+    arr = np.asarray(values, dtype=np.float64)
+    arr = np.where(np.isneginf(arr), floor, arr)
+    arr = arr[np.isfinite(arr)]
+    return float(arr.mean()) if len(arr) else float("nan")
+
+
+def _policy_from_label(label: str) -> str:
+    return label.rsplit("_seed", 1)[0] if "_seed" in label else label
+
+
+def _policy_order(policy: str) -> int:
+    base = _policy_from_label(policy)
+    if base.startswith("ambient_sampler_x0_mse"):
+        return POLICY_ORDER["ambient_sampler_x0_mse"]
+    if base.startswith("ambient_loss") or base.startswith("ambient_scalar_ambient_loss"):
+        return POLICY_ORDER["ambient_scalar_ambient_loss"]
+    if base.startswith("sr_freqmask_constant_lowpass_mask"):
+        return POLICY_ORDER["sr_freqmask_constant_lowpass_mask"]
+    if base.startswith("sr_freqmask_random_mask_same_density"):
+        return POLICY_ORDER["sr_freqmask_random_mask_same_density"]
+    if base.startswith("sr_freqmask_shuffled_target_residuals"):
+        return POLICY_ORDER["sr_freqmask_shuffled_target_residuals"]
+    return POLICY_ORDER.get(base, 999)
 
 
 def _load_model(run_dir: Path, device: torch.device):
@@ -76,7 +112,7 @@ def evaluate_run(
     lowpass_alpha: float = 0.35,
     interpolation_steps: int = 1,
     primary_collision_padded: bool = True,
-) -> tuple[dict, list[np.ndarray]]:
+) -> tuple[dict, list[np.ndarray], list[dict]]:
     model, cfg = _load_model(run_dir, device)
     env = MazeEnv.from_yaml(cfg["dataset"].get("maze_yaml", "assets/maze2d_default.yaml"))
     schedule = make_vp_schedule(cfg["diffusion"])
@@ -88,23 +124,23 @@ def evaluate_run(
     for start, goal in zip(starts, goals, strict=True):
         results.append(
             rollout_policy(
-            model,
-            env,
-            schedule,
-            start,
-            goal,
-            policy_horizon=int(dataset_cfg["policy_horizon"]),
-            execute_horizon=int(dataset_cfg["execute_horizon"]),
-            inference_steps=int(diffusion_cfg.get("inference_steps", 10)),
-            success_radius_m=float(eval_cfg.get("success_radius_m", 0.15)),
-            timeout_s=float(eval_cfg.get("timeout_s", 30.0)),
-            dt=float(eval_cfg.get("dt", 0.1)),
-            device=device,
-            execution_mode=execution_mode,
-            lowpass_alpha=lowpass_alpha,
-            interpolation_steps=interpolation_steps,
-            primary_collision_padded=primary_collision_padded,
-        )
+                model,
+                env,
+                schedule,
+                start,
+                goal,
+                policy_horizon=int(dataset_cfg["policy_horizon"]),
+                execute_horizon=int(dataset_cfg["execute_horizon"]),
+                inference_steps=int(diffusion_cfg.get("inference_steps", 10)),
+                success_radius_m=float(eval_cfg.get("success_radius_m", 0.15)),
+                timeout_s=float(eval_cfg.get("timeout_s", 30.0)),
+                dt=float(eval_cfg.get("dt", 0.1)),
+                device=device,
+                execution_mode=execution_mode,
+                lowpass_alpha=lowpass_alpha,
+                interpolation_steps=interpolation_steps,
+                primary_collision_padded=primary_collision_padded,
+            )
         )
     successes = [r for r in results if r.success]
     success_rate = len(successes) / len(results)
@@ -112,8 +148,10 @@ def evaluate_run(
     rng = np.random.default_rng(0)
     smooth_values = [r.avg_squared_acceleration for r in successes]
     smooth_low, smooth_high = _bootstrap_ci(smooth_values, rng)
+    clearance_floor = -float(env.padding)
+    policy_label = cfg.get("run_label", cfg["method"])
     row = {
-        "policy": cfg["method"],
+        "policy": policy_label,
         "run_dir": str(run_dir),
         "seed": cfg.get("seed", 0),
         "execution_mode": execution_mode,
@@ -129,28 +167,79 @@ def evaluate_run(
         "finite_difference_acceleration_mean": float(np.mean([r.finite_difference_acceleration for r in successes])) if successes else float("nan"),
         "squared_jerk_mean": float(np.mean([r.squared_jerk for r in successes])) if successes else float("nan"),
         "mean_abs_turn_rate": float(np.mean([r.mean_abs_turn_rate for r in successes])) if successes else float("nan"),
-        "min_clearance_padded_mean": float(np.mean([r.min_clearance_padded for r in results])),
-        "min_clearance_unpadded_mean": float(np.mean([r.min_clearance_unpadded for r in results])),
+        "out_of_bounds_rate": float(np.mean([r.out_of_bounds for r in results])),
+        "min_clearance_padded_success_only": _mean_finite([r.min_clearance_padded for r in successes]),
+        "min_clearance_unpadded_success_only": _mean_finite([r.min_clearance_unpadded for r in successes]),
+        "min_clearance_padded_collision_free_only": _mean_finite(
+            [r.min_clearance_padded for r in results if not r.collision_padded]
+        ),
+        "min_clearance_unpadded_collision_free_only": _mean_finite(
+            [r.min_clearance_unpadded for r in results if not r.collision_unpadded]
+        ),
+        "min_clearance_padded_all_finite_clipped": _mean_clipped([r.min_clearance_padded for r in results], clearance_floor),
+        "min_clearance_unpadded_all_finite_clipped": _mean_clipped([r.min_clearance_unpadded for r in results], clearance_floor),
         "action_target_jump_mean": float(np.mean([r.action_target_jump for r in results])),
         "path_length_mean": float(np.mean([r.path_length for r in successes])) if successes else float("nan"),
         "collision_rate": float(np.mean([r.collision for r in results])),
         "collision_rate_padded": float(np.mean([r.collision_padded for r in results])),
         "collision_rate_unpadded": float(np.mean([r.collision_unpadded for r in results])),
         "endpoint_error": float(np.mean([r.endpoint_error for r in results])),
-        "hf_residual_energy_mean": float(np.mean([r.hf_residual_energy for r in results])),
+        "hf_residual_energy_absolute_mean": float(np.mean([r.hf_residual_energy_absolute for r in results])),
+        "hf_residual_energy_delta_mean": float(np.mean([r.hf_residual_energy_delta for r in results])),
+        "hf_residual_energy_mean": float(np.mean([r.hf_residual_energy_delta for r in results])),
         "mean_num_model_steps_to_success": float(np.mean([r.steps for r in successes])) if successes else float("nan"),
     }
+    trial_rows = [
+        {
+            "policy": policy_label,
+            "method": cfg["method"],
+            "run_dir": str(run_dir),
+            "seed": cfg.get("seed", 0),
+            "trial_idx": trial_idx,
+            "success": int(result.success),
+            "collision": int(result.collision),
+            "collision_padded": int(result.collision_padded),
+            "collision_unpadded": int(result.collision_unpadded),
+            "out_of_bounds": int(result.out_of_bounds),
+            "endpoint_error": result.endpoint_error,
+            "smoothness": result.avg_squared_acceleration,
+            "hf_residual_energy_absolute": result.hf_residual_energy_absolute,
+            "hf_residual_energy_delta": result.hf_residual_energy_delta,
+        }
+        for trial_idx, result in enumerate(results)
+    ]
     paths = [r.path for r in results[:save_rollouts]]
-    return row, paths
+    return row, paths, trial_rows
 
 
 def _policy_sort_key(row: dict) -> tuple[int, str]:
     policy = str(row["policy"])
-    return POLICY_ORDER.get(policy, 999), policy
+    return _policy_order(policy), policy
+
+
+def aggregate_policy_rows(rows: list[dict]) -> list[dict]:
+    numeric_fields = [
+        "success_rate",
+        "collision_rate",
+        "hf_residual_energy_absolute_mean",
+        "hf_residual_energy_delta_mean",
+        "smoothness_mean",
+        "endpoint_error",
+    ]
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["policy"]), []).append(row)
+    out = []
+    for policy, policy_rows in grouped.items():
+        aggregate = {"policy": policy, "n": len(policy_rows)}
+        for field in numeric_fields:
+            aggregate[field] = _mean_finite([float(row[field]) for row in policy_rows])
+        out.append(aggregate)
+    return sorted(out, key=_policy_sort_key)
 
 
 def plot_summary_figures(rows: list[dict], out: Path) -> None:
-    ordered = sorted(rows, key=_policy_sort_key)
+    ordered = aggregate_policy_rows(rows)
     policies = [str(r["policy"]) for r in ordered]
 
     fig, ax = plt.subplots(figsize=(6.5, 4.5))
@@ -169,7 +258,7 @@ def plot_summary_figures(rows: list[dict], out: Path) -> None:
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(7.5, 4.0))
-    values = [float(r["hf_residual_energy_mean"]) for r in ordered]
+    values = [float(r["hf_residual_energy_delta_mean"]) for r in ordered]
     ax.bar(policies, values)
     ax.set_ylabel("mean high-frequency residual energy")
     ax.set_title("Generated residual energy")
@@ -202,7 +291,7 @@ def plot_rollout_grid(
     out: Path,
     max_trials: int = 5,
 ) -> None:
-    policies = sorted(paths_by_policy, key=lambda p: POLICY_ORDER.get(p, 999))
+    policies = sorted(paths_by_policy, key=lambda p: (_policy_order(p), p))
     if not policies:
         return
     cols = min(max_trials, min(len(v) for v in paths_by_policy.values()))
@@ -245,6 +334,95 @@ def plot_rollout_grid(
     plt.close(fig)
 
 
+def _paired_bootstrap_ci(
+    diffs_by_seed: dict[int, np.ndarray],
+    rng: np.random.Generator,
+    reps: int = 1000,
+) -> tuple[float, float]:
+    seeds = [seed for seed, values in diffs_by_seed.items() if len(values)]
+    if not seeds:
+        return float("nan"), float("nan")
+    means = []
+    for _ in range(reps):
+        sampled = []
+        for seed in rng.choice(seeds, size=len(seeds), replace=True):
+            values = diffs_by_seed[int(seed)]
+            sampled.append(rng.choice(values, size=len(values), replace=True))
+        means.append(float(np.concatenate(sampled).mean()))
+    return float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975))
+
+
+def paired_trial_stats(trial_rows: list[dict]) -> list[dict]:
+    by_key = {
+        (str(row["policy"]), int(row["seed"]), int(row["trial_idx"])): row
+        for row in trial_rows
+    }
+    policies = sorted({str(row["policy"]) for row in trial_rows}, key=lambda p: (_policy_order(p), p))
+    seeds = sorted({int(row["seed"]) for row in trial_rows})
+    trial_ids = sorted({int(row["trial_idx"]) for row in trial_rows})
+    rng = np.random.default_rng(0)
+    rows = []
+    for policy_a, policy_b in combinations(policies, 2):
+        success_diffs: dict[int, list[float]] = {seed: [] for seed in seeds}
+        collision_diffs: dict[int, list[float]] = {seed: [] for seed in seeds}
+        endpoint_diffs: dict[int, list[float]] = {seed: [] for seed in seeds}
+        smooth_both_success_diffs: dict[int, list[float]] = {seed: [] for seed in seeds}
+        a_only_success = 0
+        b_only_success = 0
+        paired_n = 0
+        for seed in seeds:
+            for trial_idx in trial_ids:
+                a = by_key.get((policy_a, seed, trial_idx))
+                b = by_key.get((policy_b, seed, trial_idx))
+                if a is None or b is None:
+                    continue
+                paired_n += 1
+                a_success = int(a["success"])
+                b_success = int(b["success"])
+                success_diffs[seed].append(float(a_success - b_success))
+                collision_diffs[seed].append(float(int(a["collision"]) - int(b["collision"])))
+                endpoint_diffs[seed].append(float(a["endpoint_error"]) - float(b["endpoint_error"]))
+                if a_success and b_success:
+                    smooth_both_success_diffs[seed].append(float(a["smoothness"]) - float(b["smoothness"]))
+                if a_success and not b_success:
+                    a_only_success += 1
+                elif b_success and not a_success:
+                    b_only_success += 1
+        if paired_n == 0:
+            continue
+        success_arrays = {seed: np.asarray(values, dtype=np.float64) for seed, values in success_diffs.items()}
+        collision_arrays = {seed: np.asarray(values, dtype=np.float64) for seed, values in collision_diffs.items()}
+        endpoint_arrays = {seed: np.asarray(values, dtype=np.float64) for seed, values in endpoint_diffs.items()}
+        smooth_arrays = {seed: np.asarray(values, dtype=np.float64) for seed, values in smooth_both_success_diffs.items()}
+        success_values = np.concatenate([values for values in success_arrays.values() if len(values)])
+        collision_values = np.concatenate([values for values in collision_arrays.values() if len(values)])
+        endpoint_values = np.concatenate([values for values in endpoint_arrays.values() if len(values)])
+        smooth_values = [values for values in smooth_arrays.values() if len(values)]
+        success_ci_low, success_ci_high = _paired_bootstrap_ci(success_arrays, rng)
+        discordant = a_only_success + b_only_success
+        rows.append(
+            {
+                "policy_a": policy_a,
+                "policy_b": policy_b,
+                "paired_trials": paired_n,
+                "success_diff_a_minus_b": float(success_values.mean()),
+                "success_diff_bootstrap_ci_low": success_ci_low,
+                "success_diff_bootstrap_ci_high": success_ci_high,
+                "success_a_only": a_only_success,
+                "success_b_only": b_only_success,
+                "mcnemar_exact_p": float(binomtest(min(a_only_success, b_only_success), discordant, 0.5).pvalue)
+                if discordant
+                else 1.0,
+                "collision_diff_a_minus_b": float(collision_values.mean()),
+                "endpoint_error_diff_a_minus_b": float(endpoint_values.mean()),
+                "smoothness_both_success_diff_a_minus_b": float(np.concatenate(smooth_values).mean())
+                if smooth_values
+                else float("nan"),
+            }
+        )
+    return rows
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", nargs="+", required=True)
@@ -285,10 +463,11 @@ def main() -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     rows: list[dict] = []
+    trial_rows: list[dict] = []
     paths_by_policy: dict[str, list[np.ndarray]] = {}
     for idx, run_dir in enumerate(run_dirs, start=1):
         print(f"evaluating {idx}/{len(run_dirs)} {run_dir}", flush=True)
-        row, paths = evaluate_run(
+        row, paths, run_trial_rows = evaluate_run(
             run_dir,
             starts_arr,
             goals_arr,
@@ -300,7 +479,9 @@ def main() -> None:
             primary_collision_padded=args.primary_collision_padding == "padded",
         )
         rows.append(row)
-        paths_by_policy[str(row["policy"])] = paths
+        trial_rows.extend(run_trial_rows)
+        rollout_key = f"{row['policy']}_seed{row['seed']}"
+        paths_by_policy[rollout_key] = paths
         print(
             f"  {row['policy']} seed={row['seed']} "
             f"success={row['success_rate']:.3f} collision={row['collision_rate']:.3f}",
@@ -311,6 +492,16 @@ def main() -> None:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
+    with (out / "trial_metrics.csv").open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(trial_rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(trial_rows)
+    paired_rows = paired_trial_stats(trial_rows)
+    if paired_rows:
+        with (out / "paired_stats.csv").open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(paired_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(paired_rows)
     np.savez_compressed(
         out / "rollout_paths.npz",
         **{

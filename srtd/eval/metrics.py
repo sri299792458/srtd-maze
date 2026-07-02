@@ -73,22 +73,53 @@ def endpoint_error(path: np.ndarray, goal: np.ndarray) -> float:
     return float(np.linalg.norm(path[-1] - goal))
 
 
+def _fixed_windows(values: np.ndarray, window: int, stride: int) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float32)
+    if len(values) == 0:
+        return np.zeros((1, window, 2), dtype=np.float32)
+    if len(values) < window:
+        pad = np.repeat(values[-1:], window - len(values), axis=0)
+        return np.concatenate([values, pad], axis=0)[None]
+    starts = range(0, len(values) - window + 1, stride)
+    return np.stack([values[i : i + window] for i in starts]).astype(np.float32)
+
+
+def generated_high_freq_residual_energy_absolute(
+    path: np.ndarray,
+    cutoff_norm: float = 0.2,
+    window: int = 16,
+    stride: int = 4,
+) -> float:
+    """High-frequency residual energy on fixed windows of absolute positions."""
+    windows = _fixed_windows(path, window=window, stride=stride)
+    tensor = torch.as_tensor(windows, dtype=torch.float32)
+    return float(high_frequency_residual_energy(tensor, cutoff_norm=cutoff_norm).mean().item())
+
+
+def generated_high_freq_residual_energy_delta(
+    path: np.ndarray,
+    cutoff_norm: float = 0.2,
+    window: int = 16,
+    stride: int = 4,
+) -> float:
+    """High-frequency residual energy on fixed windows of delta motion."""
+    path = np.asarray(path, dtype=np.float32)
+    if len(path) < 2:
+        return 0.0
+    windows = _fixed_windows(np.diff(path, axis=0), window=window, stride=stride)
+    tensor = torch.as_tensor(windows, dtype=torch.float32)
+    return float(high_frequency_residual_energy(tensor, cutoff_norm=cutoff_norm).mean().item())
+
+
 def generated_high_freq_residual_energy(
     actions: np.ndarray,
     cutoff_norm: float = 0.2,
     window: int = 16,
     stride: int = 4,
 ) -> float:
-    """High-frequency residual energy on fixed windows of delta motion."""
-    actions = np.asarray(actions, dtype=np.float32)
-    if len(actions) < 2:
-        return 0.0
-    deltas = np.diff(actions, axis=0)
-    if len(deltas) < window:
-        pad = np.repeat(deltas[-1:], window - len(deltas), axis=0) if len(deltas) else np.zeros((window, actions.shape[1]), dtype=np.float32)
-        windows = np.concatenate([deltas, pad], axis=0)[None]
-    else:
-        starts = range(0, len(deltas) - window + 1, stride)
-        windows = np.stack([deltas[i : i + window] for i in starts]).astype(np.float32)
-    tensor = torch.as_tensor(windows, dtype=torch.float32)
-    return float(high_frequency_residual_energy(tensor, cutoff_norm=cutoff_norm).mean().item())
+    return generated_high_freq_residual_energy_delta(
+        actions,
+        cutoff_norm=cutoff_norm,
+        window=window,
+        stride=stride,
+    )

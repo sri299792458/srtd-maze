@@ -133,6 +133,13 @@ def q_frequency_weights(
     eps: float = 1e-6,
 ) -> torch.Tensor:
     residual = spectral_residual(target, kernel_size=kernel_size, eps=eps)["residual"]
+    if mask_mode in {"shuffled_target_residuals", "shuffled_residuals_with_correct_visibility"}:
+        generator = torch.Generator(device=target.device)
+        generator.manual_seed(1)
+        if residual.shape[0] > 1:
+            residual = residual[torch.randperm(residual.shape[0], generator=generator, device=target.device)]
+        else:
+            residual = residual[:, torch.randperm(residual.shape[1], generator=generator, device=target.device)]
     threshold = clean_stats.clean_residual_q95.to(target.device, target.dtype)
     if mask_mode == "shuffled_clean_stats":
         generator = torch.Generator(device=target.device)
@@ -158,7 +165,7 @@ def q_frequency_weights(
     )
     if mask_mode == "compatibility_only":
         visible = torch.ones_like(visible)
-    if mask_mode == "lowfreq_only":
+    if mask_mode in {"lowfreq_only", "constant_lowpass_mask"}:
         compatibility = torch.zeros_like(compatibility)
         compatibility[:, low, :] = 1.0
         visible = torch.ones_like(visible)
@@ -167,11 +174,20 @@ def q_frequency_weights(
         "visibility_only",
         "compatibility_only",
         "lowfreq_only",
+        "constant_lowpass_mask",
+        "random_mask_same_density",
         "shuffled_clean_stats",
+        "shuffled_target_residuals",
+        "shuffled_residuals_with_correct_visibility",
     }:
         raise ValueError(f"unknown spectral mask_mode: {mask_mode}")
     weights = (visible * compatibility).clamp(0.0, 1.0)
     weights[:, low, :] = weights[:, low, :].clamp_min(low_freq_floor)
+    if mask_mode == "random_mask_same_density":
+        generator = torch.Generator(device=target.device)
+        generator.manual_seed(2)
+        density = weights.mean(dim=(1, 2), keepdim=True).clamp(0.0, 1.0)
+        weights = (torch.rand(weights.shape, device=target.device, dtype=target.dtype, generator=generator) < density).to(target.dtype)
     return weights
 
 

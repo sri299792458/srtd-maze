@@ -1,0 +1,4 @@
+extends: maze2d_audit_base.yaml
+method: sr_freqmask_compatibility_only
+spectral:
+  mask_mode: compatibility_only

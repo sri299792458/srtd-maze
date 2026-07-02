@@ -14,7 +14,8 @@ from srtd.eval.metrics import (
     endpoint_error,
     finite_difference_squared_acceleration,
     finite_difference_squared_jerk,
-    generated_high_freq_residual_energy,
+    generated_high_freq_residual_energy_absolute,
+    generated_high_freq_residual_energy_delta,
     mean_abs_turn_rate,
     mean_target_jump,
     path_length,
@@ -28,6 +29,7 @@ class RolloutResult:
     collision: bool
     collision_padded: bool
     collision_unpadded: bool
+    out_of_bounds: bool
     path_length: float
     avg_squared_acceleration: float
     finite_difference_acceleration: float
@@ -37,7 +39,8 @@ class RolloutResult:
     min_clearance_unpadded: float
     action_target_jump: float
     endpoint_error: float
-    hf_residual_energy: float
+    hf_residual_energy_absolute: float
+    hf_residual_energy_delta: float
     steps: int
 
 
@@ -55,12 +58,14 @@ def _result(
     arr = np.asarray(path, dtype=np.float32)
     raw = np.asarray(raw_targets, dtype=np.float32) if raw_targets else np.zeros((0, 2), dtype=np.float32)
     collision = collision_padded if primary_collision_padded else collision_unpadded
+    out_of_bounds = any(not env.in_bounds(point) for point in arr)
     return RolloutResult(
         path=arr,
         success=success,
         collision=collision,
         collision_padded=collision_padded,
         collision_unpadded=collision_unpadded,
+        out_of_bounds=out_of_bounds,
         path_length=path_length(arr),
         avg_squared_acceleration=average_squared_acceleration(arr, dt=dt),
         finite_difference_acceleration=finite_difference_squared_acceleration(arr, dt=dt),
@@ -70,7 +75,8 @@ def _result(
         min_clearance_unpadded=env.path_min_clearance(arr, padded=False),
         action_target_jump=mean_target_jump(raw),
         endpoint_error=endpoint_error(arr, goal),
-        hf_residual_energy=generated_high_freq_residual_energy(normalize_xy(arr)),
+        hf_residual_energy_absolute=generated_high_freq_residual_energy_absolute(normalize_xy(arr)),
+        hf_residual_energy_delta=generated_high_freq_residual_energy_delta(normalize_xy(arr)),
         steps=len(arr) - 1,
     )
 
@@ -96,21 +102,22 @@ def rollout_policy(
     model.eval()
     device = torch.device(device)
     max_model_calls = max(1, int(timeout_s / (dt * execute_horizon)))
-    prev = start.astype(np.float32)
-    curr = start.astype(np.float32)
-    path = [curr.copy()]
+    obs_prev = start.astype(np.float32)
+    obs_curr = start.astype(np.float32)
+    path_curr = start.astype(np.float32)
+    path = [path_curr.copy()]
     raw_targets: list[np.ndarray] = []
     collision_padded = False
     collision_unpadded = False
-    filter_state = curr.copy()
+    filter_state = path_curr.copy()
     interpolation_steps = max(1, int(interpolation_steps))
     path_dt = dt / interpolation_steps
 
     for _ in range(max_model_calls):
         obs_np = np.concatenate(
             [
-                normalize_xy(prev),
-                normalize_xy(curr),
+                normalize_xy(obs_prev),
+                normalize_xy(obs_curr),
                 normalize_xy(goal),
             ]
         ).astype(np.float32)
@@ -136,10 +143,10 @@ def rollout_policy(
             else:
                 raise ValueError("execution_mode must be 'raw' or 'filtered'")
 
-            segment_points = np.linspace(curr, command, interpolation_steps + 1, dtype=np.float32)[1:]
+            segment_points = np.linspace(path_curr, command, interpolation_steps + 1, dtype=np.float32)[1:]
             for point in segment_points:
-                padded_free = env.segment_is_free(curr, point, padded=True)
-                unpadded_free = env.segment_is_free(curr, point, padded=False)
+                padded_free = env.segment_is_free(path_curr, point, padded=True)
+                unpadded_free = env.segment_is_free(path_curr, point, padded=False)
                 collision_padded = collision_padded or not padded_free
                 collision_unpadded = collision_unpadded or not unpadded_free
                 primary_free = padded_free if primary_collision_padded else unpadded_free
@@ -156,10 +163,9 @@ def rollout_policy(
                         primary_collision_padded=primary_collision_padded,
                         dt=path_dt,
                     )
-                prev = curr
-                curr = point.astype(np.float32)
-                path.append(curr.copy())
-                if np.linalg.norm(curr - goal) <= success_radius_m:
+                path_curr = point.astype(np.float32)
+                path.append(path_curr.copy())
+                if np.linalg.norm(path_curr - goal) <= success_radius_m:
                     return _result(
                         path,
                         raw_targets,
@@ -171,6 +177,8 @@ def rollout_policy(
                         primary_collision_padded=primary_collision_padded,
                         dt=path_dt,
                     )
+            obs_prev = obs_curr
+            obs_curr = command.astype(np.float32)
 
     return _result(
         path,

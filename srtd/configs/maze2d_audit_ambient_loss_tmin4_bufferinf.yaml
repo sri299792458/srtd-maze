@@ -1,0 +1,6 @@
+extends: maze2d_audit_base.yaml
+method: ambient_scalar_ambient_loss
+run_label: ambient_loss_tmin4_bufferinf
+training:
+  tmin_idx_scalar: 4
+  ambient_loss_buffer: null

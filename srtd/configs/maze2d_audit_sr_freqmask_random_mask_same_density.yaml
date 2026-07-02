@@ -1,0 +1,4 @@
+extends: maze2d_audit_base.yaml
+method: sr_freqmask_random_mask_same_density
+spectral:
+  mask_mode: random_mask_same_density

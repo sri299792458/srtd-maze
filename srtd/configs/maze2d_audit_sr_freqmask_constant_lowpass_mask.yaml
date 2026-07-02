@@ -1,0 +1,4 @@
+extends: maze2d_audit_base.yaml
+method: sr_freqmask_constant_lowpass_mask
+spectral:
+  mask_mode: constant_lowpass_mask

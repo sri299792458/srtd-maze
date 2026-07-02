@@ -1,0 +1,5 @@
+extends: maze2d_audit_base.yaml
+method: ambient_sampler_x0_mse
+run_label: ambient_sampler_x0_mse_tmin4
+training:
+  tmin_idx_scalar: 4

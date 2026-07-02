@@ -125,7 +125,10 @@ def source_weights_for_method(method: str, alpha_p: float = 0.019) -> dict[int, 
         "sr_freqmask_visibility_only",
         "sr_freqmask_compatibility_only",
         "sr_freqmask_lowfreq_only",
+        "sr_freqmask_constant_lowpass_mask",
+        "sr_freqmask_random_mask_same_density",
         "sr_freqmask_shuffled_clean_stats",
+        "sr_freqmask_shuffled_target_residuals",
         "sr_full",
     }:
         return {0: alpha_p, 1: 1.0 - alpha_p}

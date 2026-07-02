@@ -51,6 +51,29 @@ frequency mask, and the faithful VP Ambient x0-loss baseline performs poorly
 enough that it should be audited further before making claims about Ambient
 Diffusion Policy itself.
 
+Additional caveat: these tracked 2026-07-01 numbers were generated before the
+rollout observation-cadence fix. Interpolation is now used only for
+collision/smoothness measurement; `obs_prev` and `obs_curr` stay at the 10 Hz
+policy cadence used during training. Rerun the audit before comparing new
+results against the CSVs above.
+
+## Next Controlled Audit
+
+The repo now includes compact `maze2d_audit_*` configs for:
+
+- `gcs_only` and `rrt_only` diagnostic anchors,
+- Ambient sampler x0-MSE gates at `tmin_idx = 4, 18, 30`,
+- Ambient x0-loss sweeps over `tmin_idx = 4, 18, 30` and loss buffers
+  `10, 100, 1000, inf`,
+- frequency-mask mechanism ablations:
+  `visibility_only`, `compatibility_only`, `lowfreq_only`,
+  `constant_lowpass_mask`, `random_mask_same_density`,
+  `shuffled_clean_stats`, and `shuffled_target_residuals`.
+
+Reports now write `trial_metrics.csv` and `paired_stats.csv` in addition to
+`metrics.csv`, keep rollout grids seed-specific, and replace `-inf` clearance
+means with finite clipped/success-only/collision-free clearance metrics.
+
 ## Seed-0 Historical Results
 
 The lightweight git history tracks source code, configs, tests, and the final

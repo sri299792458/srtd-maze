@@ -35,7 +35,10 @@ SR_FREQMASK_METHODS = {
     "sr_freqmask_visibility_only",
     "sr_freqmask_compatibility_only",
     "sr_freqmask_lowfreq_only",
+    "sr_freqmask_constant_lowpass_mask",
+    "sr_freqmask_random_mask_same_density",
     "sr_freqmask_shuffled_clean_stats",
+    "sr_freqmask_shuffled_target_residuals",
     "rrt_only_freqmask",
 }
 
@@ -45,7 +48,10 @@ SR_FREQMASK_METHOD_TO_MASK_MODE = {
     "sr_freqmask_visibility_only": "visibility_only",
     "sr_freqmask_compatibility_only": "compatibility_only",
     "sr_freqmask_lowfreq_only": "lowfreq_only",
+    "sr_freqmask_constant_lowpass_mask": "constant_lowpass_mask",
+    "sr_freqmask_random_mask_same_density": "random_mask_same_density",
     "sr_freqmask_shuffled_clean_stats": "shuffled_clean_stats",
+    "sr_freqmask_shuffled_target_residuals": "shuffled_target_residuals",
 }
 
 
@@ -56,9 +62,10 @@ def _set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def _run_id(method: str, seed: int) -> str:
+def _run_id(method: str, seed: int, run_label: str | None = None) -> str:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"maze2d_{method}_seed{seed}_{stamp}"
+    label = run_label or method
+    return f"maze2d_{label}_seed{seed}_{stamp}"
 
 
 def _load_or_generate(cfg: dict, seed: int):
@@ -190,7 +197,7 @@ def train(cfg: dict, max_steps: int | None = None) -> Path:
     seed = int(cfg.get("seed", 0))
     _set_seed(seed)
     method = cfg["method"]
-    run_dir = Path(cfg.get("run_root", "runs")) / _run_id(method, seed)
+    run_dir = Path(cfg.get("run_root", "runs")) / _run_id(method, seed, cfg.get("run_label"))
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "figures").mkdir(parents=True, exist_ok=True)
     with (run_dir / "config.json").open("w", encoding="utf-8") as f:
