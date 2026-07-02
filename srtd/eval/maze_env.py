@@ -26,6 +26,15 @@ class RectObstacle:
         x, y = float(point[0]), float(point[1])
         return self.xmin <= x <= self.xmax and self.ymin <= y <= self.ymax
 
+    def signed_distance(self, point: np.ndarray) -> float:
+        x, y = float(point[0]), float(point[1])
+        dx = max(self.xmin - x, 0.0, x - self.xmax)
+        dy = max(self.ymin - y, 0.0, y - self.ymax)
+        outside = float(np.hypot(dx, dy))
+        if outside > 0.0:
+            return outside
+        return -min(x - self.xmin, self.xmax - x, y - self.ymin, self.ymax - y)
+
 
 @dataclass
 class MazeEnv:
@@ -80,6 +89,19 @@ class MazeEnv:
             self.segment_is_free(path[i], path[i + 1], padded=padded)
             for i in range(len(path) - 1)
         )
+
+    def obstacle_clearance(self, point: np.ndarray, padded: bool = True) -> float:
+        if not self.in_bounds(point):
+            return float("-inf")
+        obstacles = self.padded_obstacles if padded else self.obstacles
+        if not obstacles:
+            return float("inf")
+        return float(min(obs.signed_distance(point) for obs in obstacles))
+
+    def path_min_clearance(self, path: np.ndarray, padded: bool = True) -> float:
+        if len(path) == 0:
+            return float("nan")
+        return float(min(self.obstacle_clearance(point, padded=padded) for point in path))
 
     def sample_free(self, rng: np.random.Generator) -> np.ndarray:
         xmin, ymin, xmax, ymax = self.bounds

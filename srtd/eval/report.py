@@ -8,9 +8,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from scipy.stats import beta
 
-from srtd.diffusion.schedules import VPSchedule
+from srtd.diffusion.schedules import make_vp_schedule
 from srtd.diffusion.temporal_unet import TemporalUNet
+from srtd.eval.bundle import create_repro_bundle
 from srtd.eval.maze_env import MazeEnv
 from srtd.eval.rollout import rollout_policy
 
@@ -19,18 +21,26 @@ POLICY_ORDER = {
     "rrt_only": 1,
     "cotrain": 2,
     "ambient_scalar": 3,
-    "sr_tmin": 4,
-    "sr_freqmask": 5,
-    "sr_full": 6,
+    "ambient_sampler_x0_mse": 3,
+    "ambient_scalar_ambient_loss": 4,
+    "sr_tmin": 5,
+    "sr_freqmask": 6,
+    "sr_freqmask_visibility_only": 7,
+    "sr_freqmask_compatibility_only": 8,
+    "sr_freqmask_lowfreq_only": 9,
+    "sr_freqmask_shuffled_clean_stats": 10,
+    "rrt_only_freqmask": 11,
+    "sr_full": 12,
 }
 
 
 def _binomial_ci(successes: int, n: int) -> tuple[float, float]:
     if n == 0:
         return 0.0, 0.0
-    p = successes / n
-    se = np.sqrt(p * (1.0 - p) / n)
-    return max(0.0, p - 1.96 * se), min(1.0, p + 1.96 * se)
+    alpha = 0.05
+    low = 0.0 if successes == 0 else float(beta.ppf(alpha / 2, successes, n - successes + 1))
+    high = 1.0 if successes == n else float(beta.ppf(1 - alpha / 2, successes + 1, n - successes))
+    return low, high
 
 
 def _bootstrap_ci(values: list[float], rng: np.random.Generator, reps: int = 1000) -> tuple[float, float]:
@@ -62,10 +72,14 @@ def evaluate_run(
     goals: np.ndarray,
     device: torch.device,
     save_rollouts: int = 0,
+    execution_mode: str = "raw",
+    lowpass_alpha: float = 0.35,
+    interpolation_steps: int = 1,
+    primary_collision_padded: bool = True,
 ) -> tuple[dict, list[np.ndarray]]:
     model, cfg = _load_model(run_dir, device)
     env = MazeEnv.from_yaml(cfg["dataset"].get("maze_yaml", "assets/maze2d_default.yaml"))
-    schedule = VPSchedule.cosine(train_steps=int(cfg["diffusion"]["train_steps"]))
+    schedule = make_vp_schedule(cfg["diffusion"])
     schedule.sigma = schedule.sigma.to(device)
     eval_cfg = cfg["eval"]
     dataset_cfg = cfg["dataset"]
@@ -86,6 +100,10 @@ def evaluate_run(
             timeout_s=float(eval_cfg.get("timeout_s", 30.0)),
             dt=float(eval_cfg.get("dt", 0.1)),
             device=device,
+            execution_mode=execution_mode,
+            lowpass_alpha=lowpass_alpha,
+            interpolation_steps=interpolation_steps,
+            primary_collision_padded=primary_collision_padded,
         )
         )
     successes = [r for r in results if r.success]
@@ -98,14 +116,26 @@ def evaluate_run(
         "policy": cfg["method"],
         "run_dir": str(run_dir),
         "seed": cfg.get("seed", 0),
+        "execution_mode": execution_mode,
+        "lowpass_alpha": lowpass_alpha,
+        "interpolation_steps": interpolation_steps,
+        "primary_collision_padding": "padded" if primary_collision_padded else "unpadded",
         "success_rate": success_rate,
         "success_ci_low": ci_low,
         "success_ci_high": ci_high,
         "smoothness_mean": float(np.mean(smooth_values)) if smooth_values else float("nan"),
         "smoothness_bootstrap_ci_low": smooth_low,
         "smoothness_bootstrap_ci_high": smooth_high,
+        "finite_difference_acceleration_mean": float(np.mean([r.finite_difference_acceleration for r in successes])) if successes else float("nan"),
+        "squared_jerk_mean": float(np.mean([r.squared_jerk for r in successes])) if successes else float("nan"),
+        "mean_abs_turn_rate": float(np.mean([r.mean_abs_turn_rate for r in successes])) if successes else float("nan"),
+        "min_clearance_padded_mean": float(np.mean([r.min_clearance_padded for r in results])),
+        "min_clearance_unpadded_mean": float(np.mean([r.min_clearance_unpadded for r in results])),
+        "action_target_jump_mean": float(np.mean([r.action_target_jump for r in results])),
         "path_length_mean": float(np.mean([r.path_length for r in successes])) if successes else float("nan"),
         "collision_rate": float(np.mean([r.collision for r in results])),
+        "collision_rate_padded": float(np.mean([r.collision_padded for r in results])),
+        "collision_rate_unpadded": float(np.mean([r.collision_unpadded for r in results])),
         "endpoint_error": float(np.mean([r.endpoint_error for r in results])),
         "hf_residual_energy_mean": float(np.mean([r.hf_residual_energy for r in results])),
         "mean_num_model_steps_to_success": float(np.mean([r.steps for r in successes])) if successes else float("nan"),
@@ -222,6 +252,12 @@ def main() -> None:
     parser.add_argument("--out", default="runs/maze2d_report")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--save-rollouts", type=int, default=5)
+    parser.add_argument("--execution-mode", choices=["raw", "filtered"], default="raw")
+    parser.add_argument("--lowpass-alpha", type=float, default=0.35)
+    parser.add_argument("--interpolation-steps", type=int, default=1)
+    parser.add_argument("--primary-collision-padding", choices=["padded", "unpadded"], default="padded")
+    parser.add_argument("--bundle-out", default=None)
+    parser.add_argument("--dataset", default=None)
     args = parser.parse_args()
 
     run_dirs = [Path(p) for pattern in args.runs for p in sorted(Path().glob(pattern))]
@@ -256,6 +292,10 @@ def main() -> None:
             goals_arr,
             device,
             save_rollouts=args.save_rollouts,
+            execution_mode=args.execution_mode,
+            lowpass_alpha=args.lowpass_alpha,
+            interpolation_steps=args.interpolation_steps,
+            primary_collision_padded=args.primary_collision_padding == "padded",
         )
         rows.append(row)
         paths_by_policy[str(row["policy"])] = paths
@@ -274,6 +314,26 @@ def main() -> None:
     )
     plot_summary_figures(rows, out)
     plot_rollout_grid(paths_by_policy, starts_arr, goals_arr, env, out)
+    with (out / "eval_config.json").open("w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "execution_mode": args.execution_mode,
+                "lowpass_alpha": args.lowpass_alpha,
+                "interpolation_steps": args.interpolation_steps,
+                "primary_collision_padding": args.primary_collision_padding,
+                "num_trials": args.num_trials,
+                "seed": args.seed,
+            },
+            f,
+            indent=2,
+        )
+    if args.bundle_out:
+        create_repro_bundle(
+            Path(args.bundle_out),
+            Path(args.dataset) if args.dataset else None,
+            run_dirs,
+            out,
+        )
     print(f"wrote {out / 'metrics.csv'}")
 
 

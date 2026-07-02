@@ -1,7 +1,12 @@
 import numpy as np
 
 from srtd.data.maze2d_dataset import MazeChunk, MazeEpisode
-from srtd.eval.diagnostics import fallback_data_sanity, sr_tmin_usable_fraction_by_t
+from srtd.eval.diagnostics import (
+    fallback_data_sanity,
+    selected_sr_tmin_table,
+    sr_tmin_usable_fraction_by_t,
+    sr_tmin_usable_fraction_from_tmins,
+)
 
 
 def test_sr_tmin_usable_fraction_by_t():
@@ -13,6 +18,15 @@ def test_sr_tmin_usable_fraction_by_t():
     ]
     frac = sr_tmin_usable_fraction_by_t(chunks, train_steps=5)
     assert np.allclose(frac, [0.0, 0.0, 1 / 3, 1 / 3, 2 / 3])
+
+
+def test_sr_tmin_selected_table_from_array():
+    frac = sr_tmin_usable_fraction_from_tmins(np.asarray([2, 4, 5]), train_steps=6)
+    table = selected_sr_tmin_table(frac, [0, 2, 4, 5])
+    assert np.allclose(
+        [table["0"], table["2"], table["4"], table["5"]],
+        [0.0, 1 / 3, 2 / 3, 1.0],
+    )
 
 
 def test_fallback_data_sanity_flags_jittered_auxiliary():
@@ -30,4 +44,3 @@ def test_fallback_data_sanity_flags_jittered_auxiliary():
 
     assert report["rrt_less_smooth_than_clean"]
     assert report["rrt_more_residual_than_clean"]
-

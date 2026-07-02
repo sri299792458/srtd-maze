@@ -38,6 +38,85 @@ def combine_source_losses(
     return sum(loss * count for loss, count in losses) / max(total, 1)
 
 
+def add_vp_ambient_noise(
+    target: torch.Tensor,
+    t_idx: torch.Tensor,
+    tmin_idx: torch.Tensor | int,
+    schedule: VPSchedule,
+    noise_tmin: torch.Tensor | None = None,
+    noise_t: torch.Tensor | None = None,
+    eps: float = 1e-8,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Sample x_t from x_tmin for the VP Ambient loss.
+
+    This implements Ambient Diffusion Policy Algorithm 3 for t > tmin:
+    x_tmin = alpha_tmin x0 + sigma_tmin z1, then
+    x_t = sqrt((1-sigma_t^2)/(1-sigma_tmin^2)) x_tmin
+        + sqrt((sigma_t^2-sigma_tmin^2)/(1-sigma_tmin^2)) z2.
+    """
+    if noise_tmin is None:
+        noise_tmin = torch.randn_like(target)
+    if noise_t is None:
+        noise_t = torch.randn_like(target)
+    sigma_t = schedule.sigma_at(t_idx).to(target.device, target.dtype)
+    if not torch.is_tensor(tmin_idx):
+        tmin_idx = torch.full_like(t_idx, int(tmin_idx))
+    sigma_min = schedule.sigma_at(tmin_idx.to(t_idx.device)).to(target.device, target.dtype)
+    sigma_t2 = sigma_t.square()
+    sigma_min2 = sigma_min.square()
+    alpha_min = torch.sqrt((1.0 - sigma_min2).clamp_min(eps))
+    x_tmin = alpha_min[:, None, None] * target + sigma_min[:, None, None] * noise_tmin
+    bridge_signal = torch.sqrt(
+        ((1.0 - sigma_t2) / (1.0 - sigma_min2).clamp_min(eps)).clamp_min(eps)
+    )
+    bridge_noise = torch.sqrt(
+        ((sigma_t2 - sigma_min2).clamp_min(eps) / (1.0 - sigma_min2).clamp_min(eps)).clamp_min(eps)
+    )
+    x_t = bridge_signal[:, None, None] * x_tmin + bridge_noise[:, None, None] * noise_t
+    return x_t, x_tmin
+
+
+def vp_ambient_x0_loss(
+    pred_x0: torch.Tensor,
+    x_t: torch.Tensor,
+    x_tmin: torch.Tensor,
+    t_idx: torch.Tensor,
+    tmin_idx: torch.Tensor | int,
+    schedule: VPSchedule,
+    ambient_buffer: float | None = None,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """VP Ambient loss for an x0-predicting model.
+
+    Uses the reparameterized form from Ambient Diffusion Policy Proposition 5:
+    || h_theta(x_t,t) + (beta_tilde / alpha_tilde) x_t
+       - (1 / alpha_tilde) x_tmin ||^2.
+    """
+    if not torch.is_tensor(tmin_idx):
+        tmin_idx = torch.full_like(t_idx, int(tmin_idx))
+    sigma_t = schedule.sigma_at(t_idx).to(pred_x0.device, pred_x0.dtype)
+    sigma_min = schedule.sigma_at(tmin_idx.to(t_idx.device)).to(pred_x0.device, pred_x0.dtype)
+    sigma_t2 = sigma_t.square()
+    sigma_min2 = sigma_min.square()
+    sqrt_min = torch.sqrt((1.0 - sigma_min2).clamp_min(eps))
+    sqrt_t = torch.sqrt((1.0 - sigma_t2).clamp_min(eps))
+    alpha_tilde = (sigma_t2 - sigma_min2).clamp_min(eps) / (sigma_t2.clamp_min(eps) * sqrt_min)
+    beta_tilde = (sigma_min2 / sigma_t2.clamp_min(eps)) * (sqrt_t / sqrt_min)
+    inv_alpha = 1.0 / alpha_tilde.clamp_min(eps)
+    if ambient_buffer is not None:
+        usable = inv_alpha.square() < float(ambient_buffer)
+        if not usable.any():
+            raise ValueError("ambient_buffer rejected every auxiliary sample")
+        pred_x0 = pred_x0[usable]
+        x_t = x_t[usable]
+        x_tmin = x_tmin[usable]
+        inv_alpha = inv_alpha[usable]
+        beta_tilde = beta_tilde[usable]
+        alpha_tilde = alpha_tilde[usable]
+    residual = pred_x0 + (beta_tilde / alpha_tilde)[:, None, None] * x_t - inv_alpha[:, None, None] * x_tmin
+    return residual.square().mean()
+
+
 def q_frequency_weights(
     target: torch.Tensor,
     t_idx: torch.Tensor,
@@ -50,16 +129,24 @@ def q_frequency_weights(
     snr_tau: float = 1.0,
     visibility_temperature: float = 0.5,
     kernel_size: int = 3,
+    mask_mode: str = "full",
     eps: float = 1e-6,
 ) -> torch.Tensor:
     residual = spectral_residual(target, kernel_size=kernel_size, eps=eps)["residual"]
     threshold = clean_stats.clean_residual_q95.to(target.device, target.dtype)
+    if mask_mode == "shuffled_clean_stats":
+        generator = torch.Generator(device=target.device)
+        generator.manual_seed(0)
+        perm = torch.randperm(threshold.shape[0], generator=generator, device=target.device)
+        threshold = threshold[perm]
     signed_margin = threshold + bad_residual_margin - residual
     compatibility = torch.sigmoid(signed_margin / compat_temperature)
     b, f, _ = compatibility.shape
     freq_norm = torch.linspace(0, 1, f, device=target.device, dtype=target.dtype)
     low = freq_norm <= global_band_cutoff_norm
     compatibility[:, low, :] = 1.0
+    if mask_mode == "visibility_only":
+        compatibility = torch.ones_like(compatibility)
 
     sigma = schedule.sigma.to(target.device, target.dtype)[t_idx]
     visible = visibility_mask(
@@ -69,6 +156,20 @@ def q_frequency_weights(
         temperature=visibility_temperature,
         eps=eps,
     )
+    if mask_mode == "compatibility_only":
+        visible = torch.ones_like(visible)
+    if mask_mode == "lowfreq_only":
+        compatibility = torch.zeros_like(compatibility)
+        compatibility[:, low, :] = 1.0
+        visible = torch.ones_like(visible)
+    if mask_mode not in {
+        "full",
+        "visibility_only",
+        "compatibility_only",
+        "lowfreq_only",
+        "shuffled_clean_stats",
+    }:
+        raise ValueError(f"unknown spectral mask_mode: {mask_mode}")
     weights = (visible * compatibility).clamp(0.0, 1.0)
     weights[:, low, :] = weights[:, low, :].clamp_min(low_freq_floor)
     return weights

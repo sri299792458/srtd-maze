@@ -43,6 +43,20 @@ Key post-fix result: `sr_freqmask` reached `0.873` success on 1000 shared
 trials, ahead of `ambient_scalar` at `0.795`; `sr_full` reached `0.836` and had
 the lowest collision rate at `0.027`.
 
+Important caveat: those tracked metrics predate the audit patch that added the
+Diffusion Policy `squaredcos_cap_v2` VP schedule, VP Ambient x0-loss,
+filtered execution, padded primary collision reporting, and reproducibility
+bundling. Treat them as the strongest fallback result so far, not as a faithful
+Ambient baseline comparison.
+
+Audit commands:
+
+```bash
+python -m srtd.diffusion.schedule_report --train-steps 100 --sigma 0.074 --t 0 5 10 18 25 50 75 99
+python -m srtd.eval.report --runs <run dirs> --execution-mode filtered --primary-collision-padding padded
+python -m srtd.eval.bundle --out runs/repro_bundle.tar.gz --dataset data/generated/maze2d_fallback_seed0_p50_q5000_h100.npz --runs <run dirs> --report-dir <report dir>
+```
+
 Heavy runtime artifacts are ignored locally and are not kept in the main
 branch. The existing GitHub Release asset
 `srtd-maze-seed0-results.tar.gz` is the pre-fix historical run archive:

@@ -151,3 +151,52 @@
 - Conclusion:
   - The post-fix seed-0 fallback rerun supports the spectral-mask objective on success.
   - This is still a single-seed fallback result; next step is multi-seed stress testing and `sr_tmin` gate tuning.
+
+## 2026-07-01 Audit/Faithfulness Patch
+
+- Read the external review in `/home/srinivas/.codex/attachments/d5aaf068-81d7-4ad7-832b-7adf0cfaa871/pasted-text.txt`.
+- Added an explicit Diffusion Policy VP schedule:
+  - `diffusion_policy_cosine` implements diffusers `squaredcos_cap_v2`,
+  - legacy `cosine` remains the old sine-sigma schedule for existing checkpoint interpretation,
+  - `python -m srtd.diffusion.schedule_report` reports sigma/index mappings.
+- Schedule diagnostic result for 100 train steps:
+  - old `sine_sigma`: `sigma=0.074 -> t_idx=5`,
+  - Diffusion Policy `squaredcos_cap_v2`: `sigma=0.074 -> t_idx=4`,
+  - `squaredcos_cap_v2` has `sigma(t=18) ~= 0.3034`, so the Ambient appendix `tmin=18` crossing is not equivalent to the scalar `sigma=0.074` under this local mapping.
+- Added true VP Ambient x0-loss support:
+  - new config: `srtd/configs/maze2d_ambient_scalar_ambient_loss.yaml`,
+  - renamed current scalar-gated x0-MSE baseline config: `srtd/configs/maze2d_ambient_sampler_x0_mse.yaml`,
+  - smoke training for the Ambient-loss path completed for 2 steps on CUDA.
+- Added Diffusion Policy-style evaluation controls:
+  - raw or first-order low-pass filtered target execution,
+  - optional linear interpolation substeps,
+  - padded and unpadded collision metrics,
+  - primary collision defaults to padded in the report CLI.
+- Added rollout-quality metrics:
+  - cubic spline acceleration,
+  - finite-difference acceleration,
+  - jerk,
+  - turn rate,
+  - padded/unpadded obstacle clearance,
+  - raw action-target jump size.
+- Added reproducibility bundling:
+  - `python -m srtd.eval.bundle`,
+  - report CLI also accepts `--bundle-out`.
+- Added `sr_tmin` audit table support at `t = 0, 5, 10, 18, 25, 50, 75, 99`.
+  - Existing seed-0 `sr_tmin` annotation table under the old `sine_sigma` schedule:
+    - `t=0`: `0.021084394305944443`
+    - `t=5`: `0.10587459057569504`
+    - `t=10`: `0.2240358293056488`
+    - `t=18`: `0.24343234300613403`
+    - `t=25`: `0.24720415472984314`
+    - `t=50`: `0.24821311235427856`
+    - `t=75`: `0.24821311235427856`
+    - `t=99`: `0.24821311235427856`
+- Added frequency-mask mechanism switches:
+  - `visibility_only`,
+  - `compatibility_only`,
+  - `lowfreq_only`,
+  - `shuffled_clean_stats`,
+  - `rrt_only_freqmask`.
+- Caveat:
+  - the tracked 0.873 `sr_freqmask` result predates this audit patch and should be rerun under the new faithful baseline/evaluation settings before making stronger claims.

@@ -12,8 +12,10 @@ import torch.nn.functional as F
 from srtd.config import load_config
 from srtd.data.maze2d_dataset import MazeChunk, build_chunks, load_episodes, save_episodes
 from srtd.data.maze2d_generate import generate_fallback_episodes
-from srtd.diffusion.schedules import VPSchedule
+from srtd.diffusion.schedule_report import schedule_report
+from srtd.diffusion.schedules import VPSchedule, make_vp_schedule
 from srtd.diffusion.temporal_unet import TemporalUNet
+from srtd.eval.diagnostics import selected_sr_tmin_table, sr_tmin_usable_fraction_from_tmins
 from srtd.eval.maze_env import MazeEnv
 from srtd.spectral.annotations import annotate_sr_tmin
 from srtd.spectral.envelope import fit_clean_spectral_stats
@@ -25,8 +27,26 @@ from srtd.spectral.plotting import (
 )
 from srtd.spectral.snr import visibility_mask
 from srtd.training.ema import EMA
-from srtd.training.losses import add_vp_noise, sr_freqmask_loss, sr_full_loss
+from srtd.training.losses import add_vp_ambient_noise, add_vp_noise, sr_freqmask_loss, sr_full_loss, vp_ambient_x0_loss
 from srtd.training.samplers import AmbientScalarSampler, ChunkSampler, SRTminSampler, source_weights_for_method
+
+SR_FREQMASK_METHODS = {
+    "sr_freqmask",
+    "sr_freqmask_visibility_only",
+    "sr_freqmask_compatibility_only",
+    "sr_freqmask_lowfreq_only",
+    "sr_freqmask_shuffled_clean_stats",
+    "rrt_only_freqmask",
+}
+
+SR_FREQMASK_METHOD_TO_MASK_MODE = {
+    "sr_freqmask": "full",
+    "rrt_only_freqmask": "full",
+    "sr_freqmask_visibility_only": "visibility_only",
+    "sr_freqmask_compatibility_only": "compatibility_only",
+    "sr_freqmask_lowfreq_only": "lowfreq_only",
+    "sr_freqmask_shuffled_clean_stats": "shuffled_clean_stats",
+}
 
 
 def _set_seed(seed: int) -> None:
@@ -79,11 +99,13 @@ def _load_or_generate(cfg: dict, seed: int):
 
 def _make_sampler(method: str, chunks: list[MazeChunk], schedule: VPSchedule, cfg: dict, seed: int):
     alpha_p = float(cfg["training"].get("alpha_p", 0.019))
-    if method == "ambient_scalar":
+    if method in {"ambient_scalar", "ambient_sampler_x0_mse", "ambient_scalar_ambient_loss"}:
         return AmbientScalarSampler(
             chunks,
             schedule,
             tmin_sigma_scalar=float(cfg["training"].get("tmin_sigma_scalar", 0.074)),
+            tmin_idx_scalar=cfg["training"].get("tmin_idx_scalar"),
+            strict_after_tmin=method == "ambient_scalar_ambient_loss",
             seed=seed,
             alpha_p=alpha_p,
         )
@@ -111,7 +133,7 @@ def prepare_chunks_and_stats(cfg: dict, run_dir: Path, seed: int):
     clean_actions = actions[source == 0]
     rrt_actions = actions[source == 1]
 
-    schedule = VPSchedule.cosine(train_steps=int(cfg["diffusion"]["train_steps"]))
+    schedule = make_vp_schedule(cfg["diffusion"])
     spectral_cfg = cfg["spectral"]
     clean_stats = fit_clean_spectral_stats(
         clean_actions,
@@ -125,7 +147,7 @@ def prepare_chunks_and_stats(cfg: dict, run_dir: Path, seed: int):
     clean_stats.save(run_dir / "spectral" / "clean_stats.pt")
 
     method = cfg["method"]
-    if method in {"sr_tmin", "sr_freqmask", "sr_full"}:
+    if method in {"sr_tmin", "sr_full"} | SR_FREQMASK_METHODS:
         tmin, bad_visible = annotate_sr_tmin(
             chunks,
             clean_stats,
@@ -140,6 +162,9 @@ def prepare_chunks_and_stats(cfg: dict, run_dir: Path, seed: int):
         (run_dir / "annotations").mkdir(parents=True, exist_ok=True)
         np.save(run_dir / "annotations" / "sr_tmin.npy", tmin)
         np.save(run_dir / "annotations" / "sr_bad_visible.npy", bad_visible)
+        usable = sr_tmin_usable_fraction_from_tmins(tmin[source.numpy() == 1], train_steps=schedule.train_steps)
+        with (run_dir / "annotations" / "sr_tmin_usable_fraction_at_t.json").open("w", encoding="utf-8") as f:
+            json.dump(selected_sr_tmin_table(usable, [0, 5, 10, 18, 25, 50, 75, 99]), f, indent=2)
         plot_sr_tmin_hist(tmin[source.numpy() == 1], run_dir / "figures" / "sr_tmin_hist.png")
 
     plot_psd_gcs_vs_rrt(
@@ -172,6 +197,8 @@ def train(cfg: dict, max_steps: int | None = None) -> Path:
         json.dump(cfg, f, indent=2)
 
     chunks, clean_stats, schedule = prepare_chunks_and_stats(cfg, run_dir, seed)
+    with (run_dir / "schedule_report.json").open("w", encoding="utf-8") as f:
+        json.dump(schedule_report(train_steps=schedule.train_steps), f, indent=2)
     device = torch.device("cuda" if torch.cuda.is_available() and cfg["training"].get("device", "auto") != "cpu" else "cpu")
     model_cfg = cfg["model"]
     model = TemporalUNet(
@@ -188,21 +215,63 @@ def train(cfg: dict, max_steps: int | None = None) -> Path:
     )
     ema = EMA(model, decay=float(cfg["training"].get("ema_decay", 0.999)))
     sampler = _make_sampler(method, chunks, schedule, cfg, seed)
+    ambient_tmin_idx = getattr(sampler, "tmin_idx", None)
 
     total_steps = int(max_steps or cfg["training"].get("total_steps", 200_000))
     batch_size = int(cfg["training"].get("batch_size", 256))
     log_every = int(cfg["training"].get("log_every", 100))
+    save_every = int(cfg["training"].get("save_every", 0))
     losses = []
     spectral_cfg = cfg["spectral"]
     schedule.sigma = schedule.sigma.to(device)
     for step in range(total_steps):
         batch = sampler.sample(batch_size, device=device)
         noised, _ = add_vp_noise(batch.actions, batch.t_idx, schedule)
+        ambient_x_tmin = None
+        if method == "ambient_scalar_ambient_loss":
+            if ambient_tmin_idx is None:
+                raise ValueError("ambient_scalar_ambient_loss requires an AmbientScalarSampler")
+            q_mask = batch.source_id == 1
+            if q_mask.any():
+                noised_q, ambient_x_tmin_q = add_vp_ambient_noise(
+                    batch.actions[q_mask],
+                    batch.t_idx[q_mask],
+                    int(ambient_tmin_idx),
+                    schedule,
+                )
+                noised = noised.clone()
+                noised[q_mask] = noised_q
+                ambient_x_tmin = torch.empty_like(batch.actions)
+                ambient_x_tmin[q_mask] = ambient_x_tmin_q
         pred = model(noised, batch.obs, batch.t_idx)
 
-        if method in {"gcs_only", "rrt_only", "cotrain", "ambient_scalar", "sr_tmin"}:
+        if method in {"gcs_only", "rrt_only", "cotrain", "ambient_scalar", "ambient_sampler_x0_mse", "sr_tmin"}:
             loss = F.mse_loss(pred, batch.actions)
-        elif method == "sr_freqmask":
+        elif method == "ambient_scalar_ambient_loss":
+            if ambient_x_tmin is None:
+                loss = F.mse_loss(pred, batch.actions)
+            else:
+                p_mask = batch.source_id == 0
+                q_mask = batch.source_id == 1
+                source_losses = []
+                if p_mask.any():
+                    source_losses.append(F.mse_loss(pred[p_mask], batch.actions[p_mask]) * int(p_mask.sum().item()))
+                if q_mask.any():
+                    source_losses.append(
+                        vp_ambient_x0_loss(
+                            pred[q_mask],
+                            noised[q_mask],
+                            ambient_x_tmin[q_mask],
+                            batch.t_idx[q_mask],
+                            int(ambient_tmin_idx),
+                            schedule,
+                            ambient_buffer=cfg["training"].get("ambient_loss_buffer"),
+                        )
+                        * int(q_mask.sum().item())
+                    )
+                loss = sum(source_losses) / batch.actions.shape[0]
+        elif method in SR_FREQMASK_METHODS:
+            mask_mode = str(spectral_cfg.get("mask_mode", SR_FREQMASK_METHOD_TO_MASK_MODE[method]))
             loss = sr_freqmask_loss(
                 pred,
                 batch.actions,
@@ -217,6 +286,7 @@ def train(cfg: dict, max_steps: int | None = None) -> Path:
                 snr_tau=float(spectral_cfg.get("snr_tau", 1.0)),
                 visibility_temperature=float(spectral_cfg.get("visibility_temperature", 0.5)),
                 kernel_size=int(spectral_cfg.get("envelope_kernel_size", 3)),
+                mask_mode=mask_mode,
                 eps=float(spectral_cfg.get("eps", 1e-6)),
             )
         elif method == "sr_full":
@@ -252,6 +322,17 @@ def train(cfg: dict, max_steps: int | None = None) -> Path:
         losses.append(float(loss.detach().cpu()))
         if (step + 1) % log_every == 0 or step == total_steps - 1:
             print(f"step={step + 1} loss={np.mean(losses[-log_every:]):.6f} device={device}")
+        if save_every > 0 and (step + 1) % save_every == 0 and (step + 1) < total_steps:
+            torch.save(
+                {
+                    "model": model.state_dict(),
+                    "ema": ema.model.state_dict(),
+                    "config": cfg,
+                    "losses": losses,
+                    "step": step + 1,
+                },
+                run_dir / f"checkpoint_step_{step + 1}.pt",
+            )
 
     torch.save(
         {
@@ -259,6 +340,7 @@ def train(cfg: dict, max_steps: int | None = None) -> Path:
             "ema": ema.model.state_dict(),
             "config": cfg,
             "losses": losses,
+            "step": total_steps,
         },
         run_dir / "checkpoint_last.pt",
     )

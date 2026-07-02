@@ -19,6 +19,35 @@ def finite_difference_squared_acceleration(path: np.ndarray, dt: float = 0.1) ->
     return float(np.square(accel).sum(axis=1).mean())
 
 
+def finite_difference_squared_jerk(path: np.ndarray, dt: float = 0.1) -> float:
+    if len(path) < 4:
+        return 0.0
+    jerk = (path[3:] - 3.0 * path[2:-1] + 3.0 * path[1:-2] - path[:-3]) / (dt**3)
+    return float(np.square(jerk).sum(axis=1).mean())
+
+
+def mean_abs_turn_rate(path: np.ndarray, dt: float = 0.1) -> float:
+    if len(path) < 3:
+        return 0.0
+    deltas = np.diff(path, axis=0)
+    norms = np.linalg.norm(deltas, axis=1)
+    valid = (norms[:-1] > 1e-8) & (norms[1:] > 1e-8)
+    if not valid.any():
+        return 0.0
+    unit_a = deltas[:-1][valid] / norms[:-1][valid, None]
+    unit_b = deltas[1:][valid] / norms[1:][valid, None]
+    cos = np.sum(unit_a * unit_b, axis=1).clip(-1.0, 1.0)
+    angles = np.arccos(cos)
+    return float(np.mean(np.abs(angles) / dt))
+
+
+def mean_target_jump(targets: np.ndarray) -> float:
+    targets = np.asarray(targets, dtype=np.float32)
+    if len(targets) < 2:
+        return 0.0
+    return float(np.linalg.norm(np.diff(targets, axis=0), axis=1).mean())
+
+
 def cubic_spline_squared_acceleration(path: np.ndarray, dt: float = 0.1) -> float:
     """Mean integrated squared acceleration from a cubic spline."""
     if len(path) < 3:

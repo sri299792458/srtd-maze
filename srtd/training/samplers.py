@@ -75,14 +75,21 @@ class AmbientScalarSampler(ChunkSampler):
         chunks: list[MazeChunk],
         schedule: VPSchedule,
         tmin_sigma_scalar: float = 0.074,
+        tmin_idx_scalar: int | None = None,
+        strict_after_tmin: bool = False,
         seed: int = 0,
         alpha_p: float = 0.019,
     ) -> None:
         super().__init__(chunks, schedule, source_weights={0: alpha_p, 1: 1.0 - alpha_p}, seed=seed)
-        self.tmin_idx = schedule.sigma_to_t_idx(tmin_sigma_scalar)
+        self.tmin_idx = int(tmin_idx_scalar) if tmin_idx_scalar is not None else schedule.sigma_to_t_idx(tmin_sigma_scalar)
+        self.strict_after_tmin = bool(strict_after_tmin)
 
     def admissible(self, chunk: MazeChunk, t_idx: int) -> bool:
-        return chunk.source_id == 0 or t_idx >= self.tmin_idx
+        if chunk.source_id == 0:
+            return True
+        if self.strict_after_tmin:
+            return t_idx > self.tmin_idx
+        return t_idx >= self.tmin_idx
 
 
 class SRTminSampler(ChunkSampler):
@@ -106,9 +113,20 @@ class SRTminSampler(ChunkSampler):
 def source_weights_for_method(method: str, alpha_p: float = 0.019) -> dict[int, float]:
     if method == "gcs_only":
         return {0: 1.0}
-    if method == "rrt_only":
+    if method in {"rrt_only", "rrt_only_freqmask"}:
         return {1: 1.0}
-    if method in {"cotrain", "ambient_scalar", "sr_tmin", "sr_freqmask", "sr_full"}:
+    if method in {
+        "cotrain",
+        "ambient_scalar",
+        "ambient_sampler_x0_mse",
+        "ambient_scalar_ambient_loss",
+        "sr_tmin",
+        "sr_freqmask",
+        "sr_freqmask_visibility_only",
+        "sr_freqmask_compatibility_only",
+        "sr_freqmask_lowfreq_only",
+        "sr_freqmask_shuffled_clean_stats",
+        "sr_full",
+    }:
         return {0: alpha_p, 1: 1.0 - alpha_p}
     raise ValueError(f"unknown method: {method}")
-

@@ -9,7 +9,7 @@ import numpy as np
 
 from srtd.data.maze2d_dataset import MazeChunk, build_chunks, load_episodes
 from srtd.data.normalization import normalize_xy
-from srtd.diffusion.schedules import VPSchedule
+from srtd.diffusion.schedules import make_vp_schedule
 from srtd.eval.metrics import average_squared_acceleration, generated_high_freq_residual_energy
 
 
@@ -56,6 +56,30 @@ def sr_tmin_usable_fraction_by_t(
     return (q_tmins[None, :] <= t[:, None]).mean(axis=1).astype(np.float32)
 
 
+def sr_tmin_usable_fraction_from_tmins(
+    tmins: np.ndarray,
+    train_steps: int,
+) -> np.ndarray:
+    q_tmins = np.asarray(tmins, dtype=np.int64)
+    q_tmins = q_tmins[q_tmins >= 0]
+    if len(q_tmins) == 0:
+        return np.zeros(train_steps, dtype=np.float32)
+    t = np.arange(train_steps, dtype=np.int64)
+    clipped = np.minimum(q_tmins, train_steps)
+    return (clipped[None, :] <= t[:, None]).mean(axis=1).astype(np.float32)
+
+
+def selected_sr_tmin_table(
+    usable_fraction: np.ndarray,
+    t_indices: list[int],
+) -> dict[str, float]:
+    return {
+        str(t): float(usable_fraction[t])
+        for t in t_indices
+        if 0 <= t < len(usable_fraction)
+    }
+
+
 def fallback_data_sanity(episodes, dt: float = 0.1) -> dict:
     smoothness = episode_smoothness_by_source(episodes, dt=dt)
     residual = episode_residual_energy_by_source(episodes)
@@ -79,6 +103,9 @@ def main() -> None:
     parser.add_argument("--obs-horizon", type=int, default=2)
     parser.add_argument("--stride", type=int, default=4)
     parser.add_argument("--train-steps", type=int, default=100)
+    parser.add_argument("--schedule", default="sine_sigma")
+    parser.add_argument("--sr-tmin-npy", default=None)
+    parser.add_argument("--sr-tmin-table-t", type=int, nargs="*", default=[0, 5, 10, 18, 25, 50, 75, 99])
     args = parser.parse_args()
 
     episodes = load_episodes(args.episodes)
@@ -89,10 +116,18 @@ def main() -> None:
         obs_horizon=args.obs_horizon,
         stride=args.stride,
     )
-    schedule = VPSchedule.cosine(train_steps=args.train_steps)
+    schedule = make_vp_schedule({"schedule": args.schedule, "train_steps": args.train_steps})
     report["num_chunks"] = len(chunks)
     report["num_episodes"] = len(episodes)
     report["train_steps"] = schedule.train_steps
+    report["schedule"] = schedule.name
+    if args.sr_tmin_npy:
+        tmins = np.load(args.sr_tmin_npy)
+        usable = sr_tmin_usable_fraction_from_tmins(tmins, train_steps=schedule.train_steps)
+        report["sr_tmin_usable_fraction_at_t"] = selected_sr_tmin_table(
+            usable,
+            args.sr_tmin_table_t,
+        )
     text = json.dumps(report, indent=2)
     if args.out:
         out = Path(args.out)
@@ -104,4 +139,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

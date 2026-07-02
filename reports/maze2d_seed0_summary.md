@@ -72,6 +72,12 @@ has been published for this rerun.
 This post-fix seed-0 fallback experiment supports the spectral-mask policy
 hypothesis on success rate.
 
+Important caveat: this rerun predates the audit patch that added Diffusion
+Policy's `squaredcos_cap_v2` VP schedule, a true VP Ambient x0-loss baseline,
+filtered execution, padded primary collision reporting, and reproducibility
+bundling. The result is useful as a fallback signal, but it is not yet a
+faithful Ambient baseline comparison.
+
 - `sr_freqmask` achieved the best success rate: `0.873`, with 95% CI
   `[0.852, 0.894]`.
 - `ambient_scalar` remained a strong baseline at `0.795`, with 95% CI
@@ -85,6 +91,19 @@ hypothesis on success rate.
 - The SRTD variants trade off smoothness under the cubic-spline acceleration
   metric; both high-performing SRTD policies are less smooth than
   `ambient_scalar`.
+
+Current `sr_tmin` usable RRT fraction under the old `sine_sigma` schedule:
+
+| t | usable RRT fraction |
+|---:|---:|
+| 0 | 0.0211 |
+| 5 | 0.1059 |
+| 10 | 0.2240 |
+| 18 | 0.2434 |
+| 25 | 0.2472 |
+| 50 | 0.2482 |
+| 75 | 0.2482 |
+| 99 | 0.2482 |
 
 Next technical work should focus on stress-testing this result:
 
