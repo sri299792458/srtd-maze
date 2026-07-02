@@ -200,3 +200,60 @@
   - `rrt_only_freqmask`.
 - Caveat:
   - the tracked 0.873 `sr_freqmask` result predates this audit patch and should be rerun under the new faithful baseline/evaluation settings before making stronger claims.
+
+## 2026-07-01 Audited 3-Seed Training and Evaluation
+
+- Added minimal audited sweep configs using the `diffusion_policy_cosine`
+  schedule:
+  - `srtd/configs/maze2d_audit_cotrain.yaml`
+  - `srtd/configs/maze2d_audit_sr_freqmask.yaml`
+  - `srtd/configs/maze2d_audit_sr_freqmask_shuffled_clean_stats.yaml`
+- Generated cached fallback datasets for seeds 1 and 2:
+  - `data/generated/maze2d_fallback_seed1_p50_q5000_h100.npz`
+  - `data/generated/maze2d_fallback_seed2_p50_q5000_h100.npz`
+- Trained 15 total policies over seeds 0, 1, and 2:
+  - `cotrain`
+  - `ambient_sampler_x0_mse`
+  - `ambient_scalar_ambient_loss`
+  - `sr_freqmask`
+  - `sr_freqmask_shuffled_clean_stats`
+- Training manifest:
+  - `logs/audit3seed_20260701_213340_manifest.txt`
+- All 15 final checkpoints completed under `runs/*_20260701_213343`.
+- Ran the primary audited filtered/padded report:
+  `python -m srtd.eval.report --runs <15 manifest runs> --num-trials 1000 --out runs/audit3seed_filtered_padded_20260701_report --seed 0 --save-rollouts 5 --execution-mode filtered --lowpass-alpha 0.35 --interpolation-steps 4 --primary-collision-padding padded`
+- Ran the raw/padded companion report:
+  `python -m srtd.eval.report --runs <15 manifest runs> --num-trials 1000 --out runs/audit3seed_raw_padded_20260701_report --seed 0 --save-rollouts 5 --execution-mode raw --interpolation-steps 4 --primary-collision-padding padded`
+- Tracked audit outputs:
+  - `reports/maze2d_audit3seed_summary.md`
+  - `reports/maze2d_audit3seed_aggregate.csv`
+  - `reports/maze2d_audit3seed_filtered_padded_metrics.csv`
+  - `reports/maze2d_audit3seed_raw_padded_metrics.csv`
+- Local reproducibility bundle:
+  - `runs/audit3seed_repro_20260701.tar.gz`
+  - size: about 290 MB
+  - includes all three generated datasets, all 15 final checkpoints/configs,
+    spectral annotations/figures, and both report directories
+  - excludes intermediate step checkpoints by default
+- Main filtered/padded aggregate result:
+  - `sr_freqmask`: `0.470 +/- 0.018` success, `0.472 +/- 0.035` collision
+  - `sr_freqmask_shuffled_clean_stats`: `0.463 +/- 0.016` success,
+    `0.467 +/- 0.029` collision
+  - `cotrain`: `0.405 +/- 0.026` success, `0.489 +/- 0.025` collision
+  - `ambient_sampler_x0_mse`: `0.294 +/- 0.022` success
+  - `ambient_scalar_ambient_loss`: `0.107 +/- 0.015` success
+- Raw/padded companion result:
+  - `sr_freqmask`: `0.522 +/- 0.010` success
+  - `sr_freqmask_shuffled_clean_stats`: `0.505 +/- 0.012` success
+  - `cotrain`: `0.498 +/- 0.019` success
+  - `ambient_sampler_x0_mse`: `0.398 +/- 0.003` success
+  - `ambient_scalar_ambient_loss`: `0.129 +/- 0.018` success
+- Interpretation:
+  - `sr_freqmask` is best on mean success in both audited reports.
+  - The shuffled-clean-stats ablation is too close to claim that clean spectral
+    compatibility is the decisive mechanism.
+  - The faithful VP Ambient x0-loss baseline performs poorly enough that it
+    should be treated as an implementation/tuning warning rather than a
+    conclusion about Ambient Diffusion Policy.
+  - The current result is a useful diagnostic research deliverable, not a
+    clean positive paper result.

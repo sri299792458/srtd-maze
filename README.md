@@ -28,7 +28,30 @@ python -m srtd.training.train_maze2d --config srtd/configs/maze2d_sr_tmin.yaml -
 Long training is not run by default. The config defaults mirror the requested
 experiment, but the CLI accepts `--max-steps` for fast smoke tests.
 
-## Seed-0 Results
+## Audited 3-Seed Results
+
+The current audited result is tracked in:
+
+- Summary: `reports/maze2d_audit3seed_summary.md`
+- Aggregate metrics: `reports/maze2d_audit3seed_aggregate.csv`
+- Filtered/padded per-run metrics: `reports/maze2d_audit3seed_filtered_padded_metrics.csv`
+- Raw/padded per-run metrics: `reports/maze2d_audit3seed_raw_padded_metrics.csv`
+- Local reproducibility bundle: `runs/audit3seed_repro_20260701.tar.gz`
+
+Key audited result: `sr_freqmask` has the best mean success across three
+seeds, but only narrowly. In the primary filtered/padded report it reaches
+`0.470 +/- 0.018` success versus `cotrain` at `0.405 +/- 0.026` and
+`sr_freqmask_shuffled_clean_stats` at `0.463 +/- 0.016`. In the raw/padded
+companion report it reaches `0.522 +/- 0.010` versus `cotrain` at
+`0.498 +/- 0.019`.
+
+Important caveat: this is a diagnostic research result, not a clean proof of
+the mechanism. The shuffled-clean-stats ablation is very close to the full
+frequency mask, and the faithful VP Ambient x0-loss baseline performs poorly
+enough that it should be audited further before making claims about Ambient
+Diffusion Policy itself.
+
+## Seed-0 Historical Results
 
 The lightweight git history tracks source code, configs, tests, and the final
 seed-0 summary metrics in `reports/`.
@@ -56,6 +79,10 @@ python -m srtd.diffusion.schedule_report --train-steps 100 --sigma 0.074 --t 0 5
 python -m srtd.eval.report --runs <run dirs> --execution-mode filtered --primary-collision-padding padded
 python -m srtd.eval.bundle --out runs/repro_bundle.tar.gz --dataset data/generated/maze2d_fallback_seed0_p50_q5000_h100.npz --runs <run dirs> --report-dir <report dir>
 ```
+
+`srtd.eval.bundle` stores final checkpoints by default. Pass
+`--include-step-checkpoints` only when a large archive with intermediate
+checkpoints is actually needed.
 
 Heavy runtime artifacts are ignored locally and are not kept in the main
 branch. The existing GitHub Release asset

@@ -258,6 +258,7 @@ def main() -> None:
     parser.add_argument("--primary-collision-padding", choices=["padded", "unpadded"], default="padded")
     parser.add_argument("--bundle-out", default=None)
     parser.add_argument("--dataset", default=None)
+    parser.add_argument("--bundle-include-step-checkpoints", action="store_true")
     args = parser.parse_args()
 
     run_dirs = [Path(p) for pattern in args.runs for p in sorted(Path().glob(pattern))]
@@ -285,7 +286,8 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     rows: list[dict] = []
     paths_by_policy: dict[str, list[np.ndarray]] = {}
-    for run_dir in run_dirs:
+    for idx, run_dir in enumerate(run_dirs, start=1):
+        print(f"evaluating {idx}/{len(run_dirs)} {run_dir}", flush=True)
         row, paths = evaluate_run(
             run_dir,
             starts_arr,
@@ -299,6 +301,11 @@ def main() -> None:
         )
         rows.append(row)
         paths_by_policy[str(row["policy"])] = paths
+        print(
+            f"  {row['policy']} seed={row['seed']} "
+            f"success={row['success_rate']:.3f} collision={row['collision_rate']:.3f}",
+            flush=True,
+        )
 
     with (out / "metrics.csv").open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
@@ -333,6 +340,7 @@ def main() -> None:
             Path(args.dataset) if args.dataset else None,
             run_dirs,
             out,
+            include_step_checkpoints=args.bundle_include_step_checkpoints,
         )
     print(f"wrote {out / 'metrics.csv'}")
 
